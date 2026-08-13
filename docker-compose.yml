@@ -1,0 +1,76 @@
+name: reelops
+
+services:
+  migrate:
+    image: postgres:17-alpine
+    env_file: .env
+    command: ["sh", "/scripts/migrate.sh"]
+    volumes:
+      - ./supabase/migrations:/migrations:ro
+      - ./scripts/migrate.sh:/scripts/migrate.sh:ro
+    restart: "no"
+
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+    env_file: .env
+    ports:
+      - "${WEB_BIND_ADDRESS:-127.0.0.1}:${WEB_PORT:-3000}:3000"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+    init: true
+    depends_on:
+      redis: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/api/ready').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 20s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    logging:
+      options: { max-size: "10m", max-file: "3" }
+
+  worker:
+    build:
+      context: .
+      dockerfile: apps/worker/Dockerfile
+    env_file: .env
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+    init: true
+    deploy:
+      resources:
+        limits: { cpus: "3.0", memory: 6G }
+    volumes:
+      - reelops-tmp:/tmp/reelops
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+      redis: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD-SHELL", "test -f /tmp/reelops/worker-alive && find /tmp/reelops/worker-alive -mmin -2 | grep -q ."]
+      interval: 30s
+      timeout: 5s
+      retries: 4
+      start_period: 40s
+    logging:
+      options: { max-size: "20m", max-file: "5" }
+
+  redis:
+    image: redis:7.4-alpine
+    command: ["redis-server", "--appendonly", "yes", "--appendfsync", "everysec", "--maxmemory", "512mb", "--maxmemory-policy", "noeviction"]
+    volumes: ["redis-data:/data"]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    logging:
+      options: { max-size: "10m", max-file: "3" }
+
+volumes:
+  redis-data:
+  reelops-tmp:
