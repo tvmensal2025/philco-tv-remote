@@ -1,0 +1,15 @@
+node_modules
+.next
+dist
+build
+tmp
+outputs
+work
+.gemini
+*.py
+*.pt
+Dockerfile
+Dockerfile.*
+.dockerignore
+requirements.txt
+.gitignore
