@@ -10,9 +10,11 @@ ENV YOLO_SEG_MODEL=yolov8n-seg.pt
 ENV YOLO_CONF=0.35
 ENV YOLO_MAX_SECONDS=20
 ENV YOLO_FPS_SAMPLE=2
+ENV YOLO_CONFIG_DIR=/root/.ultralytics
 ENV PORT=8000
 
 WORKDIR /app
+RUN mkdir -p /root/.ultralytics
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libgl1 libglib2.0-0 libsm6 libxext6 libxrender1 libgomp1 curl \

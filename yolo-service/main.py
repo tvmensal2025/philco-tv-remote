@@ -39,6 +39,14 @@ DEFAULT_CONF = float(os.getenv("YOLO_CONF", "0.35"))
 MAX_SECONDS = float(os.getenv("YOLO_MAX_SECONDS", "20"))
 FPS_SAMPLE = float(os.getenv("YOLO_FPS_SAMPLE", "2"))
 API_KEY = os.getenv("YOLO_API_KEY", "").strip()
+WEIGHTS_DIR = os.getenv("YOLO_CONFIG_DIR", "/root/.ultralytics")
+
+_models: dict[str, Any] = {"detect": None, "pose": None, "face": None, "seg": None}
+_face_failed = False
+_seg_failed = False
+
+os.makedirs(WEIGHTS_DIR, exist_ok=True)
+os.environ.setdefault("YOLO_CONFIG_DIR", WEIGHTS_DIR)
 
 _models: dict[str, Any] = {"detect": None, "pose": None, "face": None, "seg": None}
 _face_failed = False
@@ -74,6 +82,12 @@ def require_key(authorization: str | None) -> None:
         raise HTTPException(status_code=401, detail="unauthorized")
 
 
+def model_path(name: str) -> str:
+    if os.path.isabs(name):
+        return name
+    return os.path.join(WEIGHTS_DIR, os.path.basename(name))
+
+
 def load_yolo(path: str):
     from ultralytics import YOLO
 
@@ -93,7 +107,7 @@ def get_model(kind: str):
     if _models[kind] is None:
         names = {"detect": DETECT_MODEL, "pose": POSE_MODEL, "face": FACE_MODEL, "seg": SEG_MODEL}
         try:
-            _models[kind] = load_yolo(names[kind])
+            _models[kind] = load_yolo(model_path(names[kind]))
         except Exception:
             if kind == "face":
                 _face_failed = True
@@ -341,6 +355,19 @@ async def auth_middleware(request, call_next):
     return await call_next(request)
 
 
+@app.get("/")
+def root():
+    return {
+        "service": "cenapronta-yolo",
+        "status": "ok",
+        "device": "cpu",
+        "health": "/health",
+        "analyze_frame": "POST /analyze-frame",
+        "analyze_video": "POST /analyze-video",
+        "worker_url": "http://cenapronta_yolo:8000",
+    }
+
+
 @app.get("/health")
 def health():
     return {
@@ -350,6 +377,7 @@ def health():
         "face_available": not _face_failed,
         "max_seconds": MAX_SECONDS,
         "device": "cpu",
+        "weights_dir": WEIGHTS_DIR,
     }
 
 
