@@ -1,0 +1,30 @@
+{
+  "apiUrl": "http://localhost:3000",
+  "ingestKey": "COLE_A_INGEST_API_KEY",
+  "restaurantId": "UUID_DO_RESTAURANTE",
+  "sourceMode": "watch",
+  "outbox": "C:\\\\CenaPronta\\\\outbox",
+  "camerasDir": "C:\\\\CenaPronta\\\\cameras",
+  "uploaded": "C:\\\\CenaPronta\\\\uploaded",
+  "failed": "C:\\\\CenaPronta\\\\failed",
+  "dbPath": "C:\\\\CenaPronta\\\\uploaded-files.sqlite",
+  "fileStableSeconds": 3,
+  "fileStableChecks": 3,
+  "moveOnSuccess": true,
+  "moveOnFailure": true,
+  "timestampTimezone": "-03:00",
+  "cameras": {
+    "cam-01": 1,
+    "cam-02": 2,
+    "cam-03": 3,
+    "cam-04": 4
+  },
+  "sources": [
+    {
+      "camera": "cam-01",
+      "path": "C:\\\\CenaPronta\\\\cameras\\\\C1",
+      "mode": "watch",
+      "filenamePattern": "^(?<cam>cam-0*(?<pos>\\d+))_(?<start>\\d{8}T\\d{6})_(?<end>\\d{8}T\\d{6})\\.mp4$"
+    }
+  ]
+}

@@ -1,0 +1,171 @@
+import {
+  adaptVideoEditDecisionV1ToV2,
+  parseVideoEditDecision,
+  parseVideoEditDecisionV2,
+  repairVideoEditDecision,
+  repairVideoEditDecisionV2,
+  type RestaurantVideoBrandProfile,
+  type VideoEditDecisionV2,
+} from '@reelops/shared';
+import { config } from '../config.js';
+import { log } from '../services.js';
+import type { ReelPlan } from './planner.js';
+import { decisionFromReelPlan } from './director.js';
+import {
+  directorCandidatesFromClips,
+  repairDirectorReferences,
+  validateDirectorReferences,
+  type DirectorCandidate,
+} from './scene-resolver.js';
+import type { ClipCandidate } from '../adapters/analyzer.js';
+
+export type DirectorInput = {
+  plan: ReelPlan;
+  clips: ClipCandidate[];
+  ids: { tenantId: string; restaurantId: string; momentId: string; reelId: string };
+  brand?: RestaurantVideoBrandProfile;
+};
+
+const playbooks: Record<string, string> = {
+  casa: 'CASA constraints: experience, dining room, human warmth, establishing shots, elegant pace. Prefer ambience/master. Few cuts.',
+  oficio: 'OFÍCIO constraints: process, team, kitchen, prep, action. Prefer side/kitchen cameras.',
+  assinatura:
+    'ASSINATURA constraints: food hero, plating, dish detail. Prefer food camera unless that angle is blocked.',
+  pulso: 'PULSO constraints: energy, movement, faster cuts, action. Still never invent cameras.',
+};
+
+function parseDecision(
+  raw: unknown,
+  ids: DirectorInput['ids'],
+  program: ReelPlan['program'],
+  fallbackV1: ReturnType<typeof decisionFromReelPlan>,
+): VideoEditDecisionV2 {
+  const merged = { ...(raw as object), schemaVersion: '2.0', scoreScale: '0-100', ...ids, program };
+  let parsed = parseVideoEditDecisionV2(merged);
+  if (!parsed.success) parsed = repairVideoEditDecisionV2(merged);
+  if (parsed.success) return parsed.data;
+  const v1 = parseVideoEditDecision({
+    ...fallbackV1,
+    ...(raw as object),
+    schemaVersion: '1.0',
+    scoreScale: '0-100',
+    ...ids,
+    program,
+  });
+  const repairedV1 = v1.success
+    ? v1
+    : repairVideoEditDecision({
+        ...fallbackV1,
+        ...(raw as object),
+        schemaVersion: '1.0',
+        scoreScale: '0-100',
+        ...ids,
+        program,
+      });
+  if (!repairedV1.success) throw new Error('DIRECTOR_INVALID_OUTPUT');
+  return adaptVideoEditDecisionV1ToV2(repairedV1.data);
+}
+
+export async function decideWithAiDirector(input: DirectorInput): Promise<{
+  decision: VideoEditDecisionV2;
+  latencyMs: number;
+  usage?: { prompt_tokens?: number; completion_tokens?: number };
+  model: string;
+}> {
+  if (!config.OPENAI_API_KEY) throw new Error('DIRECTOR_INVALID_OUTPUT:openai_missing');
+  const candidates: DirectorCandidate[] = directorCandidatesFromClips(input.clips);
+  if (!candidates.length) throw new Error('DIRECTOR_INVALID_REFERENCE');
+  const legacy = adaptVideoEditDecisionV1ToV2(
+    decisionFromReelPlan(input.plan, input.ids, input.brand),
+  );
+  const started = Date.now();
+  const body = {
+    model: config.OPENAI_MODEL,
+    temperature: 0.2,
+    max_tokens: 1600,
+    response_format: { type: 'json_object' as const },
+    messages: [
+      {
+        role: 'system',
+        content:
+          'Return only VideoEditDecisionV2 JSON. schemaVersion=2.0 scoreScale=0-100. cameraId and recordingId MUST be copied from candidates (real UUIDs). cameraLabel like C4 is display-only and MUST NOT be used as cameraId or recordingId. sourceStartMs/sourceEndMs are milliseconds relative to the recording, never Unix time. Do not invent UUIDs, prices, discounts, ingredients, awards or dates. Neutral title if unsure. No markdown.',
+      },
+      {
+        role: 'user',
+        content: JSON.stringify({
+          playbook: playbooks[input.plan.program] ?? playbooks.casa,
+          program: input.plan.program,
+          brand: input.brand ?? null,
+          candidates: candidates.map((item) => ({
+            cameraId: item.cameraId,
+            recordingId: item.recordingId,
+            cameraPosition: item.cameraPosition,
+            cameraRole: item.cameraRole,
+            cameraLabel: item.cameraLabel,
+            windowStartMs: Math.round(item.startOffsetSeconds * 1000),
+            windowEndMs: Math.round((item.startOffsetSeconds + item.windowDurationSeconds) * 1000),
+          })),
+          vision: {
+            provider: input.plan.provider,
+            model: input.plan.model,
+            score: input.plan.score,
+            reason: input.plan.reason,
+            detailedScores: input.plan.detailedScores,
+            cameraRankings: input.plan.cameraRankings,
+            bestFrames: input.plan.bestFrames,
+            caption: input.plan.caption,
+          },
+          legacyDecision: legacy,
+          ids: input.ids,
+        }),
+      },
+    ],
+  };
+  const response = await fetch('https://api.openai.com/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      authorization: `Bearer ${config.OPENAI_API_KEY}`,
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify(body),
+  });
+  const payload = (await response.json()) as {
+    error?: { message?: string };
+    choices?: Array<{ message?: { content?: string } }>;
+    usage?: { prompt_tokens?: number; completion_tokens?: number };
+  };
+  if (!response.ok)
+    throw new Error(`DIRECTOR_INVALID_OUTPUT:${payload.error?.message ?? response.status}`);
+  const raw = JSON.parse(payload.choices?.[0]?.message?.content ?? '{}');
+  let decision = parseDecision(
+    raw,
+    input.ids,
+    input.plan.program,
+    decisionFromReelPlan(input.plan, input.ids, input.brand),
+  );
+  try {
+    validateDirectorReferences(decision, candidates);
+  } catch {
+    decision = repairDirectorReferences(decision, candidates);
+    validateDirectorReferences(decision, candidates);
+  }
+  log.info(
+    {
+      provider: 'openai',
+      model: config.OPENAI_MODEL,
+      latency_ms: Date.now() - started,
+      prompt_tokens: payload.usage?.prompt_tokens,
+      completion_tokens: payload.usage?.completion_tokens,
+      program: input.plan.program,
+      scenes: decision.scenes.length,
+      cameras: decision.scenes.map((scene) => scene.cameraId),
+    },
+    'ai director',
+  );
+  return {
+    decision,
+    latencyMs: Date.now() - started,
+    usage: payload.usage,
+    model: config.OPENAI_MODEL,
+  };
+}

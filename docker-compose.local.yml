@@ -1,0 +1,28 @@
+name: reelops-local
+
+services:
+  redis:
+    image: redis:7.4-alpine
+    ports:
+      - '6379:6379'
+    command: ['redis-server', '--appendonly', 'yes']
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  minio:
+    image: minio/minio:latest
+    command: ['server', '/data', '--console-address', ':9001']
+    environment:
+      MINIO_ROOT_USER: reelops
+      MINIO_ROOT_PASSWORD: reelops-local-minio
+    ports:
+      - '9000:9000'
+      - '9001:9001'
+    volumes:
+      - reelops-minio:/data
+
+volumes:
+  reelops-minio:

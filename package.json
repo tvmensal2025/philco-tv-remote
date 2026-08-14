@@ -1,21 +1,57 @@
 {
   "name": "reelops",
   "private": true,
-  "workspaces": ["apps/*", "packages/*"],
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
   "scripts": {
-    "dev": "npm run build -w @reelops/shared && node scripts/run-with-env.mjs run dev -w @reelops/web",
-    "build": "npm run build -w @reelops/shared && npm run build -w @reelops/web && npm run build -w @reelops/worker",
-    "typecheck": "npm run typecheck -w @reelops/shared && npm run typecheck -w @reelops/web && npm run typecheck -w @reelops/worker",
+    "dev": "node scripts/run-with-env.mjs run dev:apps",
+    "dev:apps": "turbo run dev",
+    "build": "turbo run build",
+    "lint": "turbo run lint",
+    "lint:fix": "eslint . --fix",
+    "typecheck": "npm run build -w @reelops/shared && npm run typecheck -w @reelops/shared && npm run typecheck -w @reelops/web && npm run typecheck -w @reelops/worker",
     "worker": "npm run build -w @reelops/shared && node scripts/run-with-env.mjs run dev -w @reelops/worker",
-    "check": "npm run typecheck && npm run build",
+    "check": "npm run lint && npm run typecheck && npm run build",
     "config:check": "node scripts/check-env.mjs",
     "key:generate": "node scripts/generate-key.mjs",
+    "test:e2e": "playwright test",
+    "test:e2e:setup": "playwright test tests/e2e/setup.spec.ts",
+    "test:e2e:ui": "playwright test --ui",
+    "test:e2e:install": "playwright install chromium",
     "test:video": "npm run build -w @reelops/shared && npm run build -w @reelops/worker && node scripts/smoke-video.mjs",
-    "segment:upload": "node scripts/upload-segment.mjs"
+    "test:security": "node --test tests/security/migrations.test.mjs",
+    "segment:upload": "node scripts/upload-segment.mjs",
+    "uploader": "node apps/uploader/src/index.mjs",
+    "prepare": "husky",
+    "test": "turbo run test",
+    "format": "prettier --write ."
   },
-  "engines": { "node": ">=20.9" },
+  "engines": {
+    "node": ">=20.9"
+  },
   "overrides": {
     "postcss": "^8.5.23",
     "sharp": "^0.35.0"
-  }
+  },
+  "devDependencies": {
+    "@axe-core/playwright": "^4.10.2",
+    "@playwright/test": "^1.51.1",
+    "@types/node": "^26.2.0",
+    "eslint": "9.39.5",
+    "eslint-config-next": "16.3.0",
+    "husky": "^9.1.7",
+    "lint-staged": "^17.3.0",
+    "prettier": "^3.9.6",
+    "ts-node": "^10.9.2",
+    "turbo": "^2.10.9",
+    "typescript": "^6.0.3",
+    "typescript-eslint": "8.67.0",
+    "vitest": "^4.1.10"
+  },
+  "lint-staged": {
+    "*": "prettier --write --ignore-unknown"
+  },
+  "packageManager": "npm@10.2.4"
 }

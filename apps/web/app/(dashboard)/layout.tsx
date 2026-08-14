@@ -1,7 +1,7 @@
-import AppShell from "@/components/app-shell";
-import { dashboardContext } from "@/lib/dashboard-context";
+import AppShell from '@/components/app-shell';
+import { dashboardContext } from '@/lib/dashboard-context';
 
-export const dynamic = "force-dynamic";
+export const dynamic = 'force-dynamic';
 
 export default async function DashboardLayout({ children }: { children: React.ReactNode }) {
   const context = await dashboardContext();
@@ -11,9 +11,11 @@ export default async function DashboardLayout({ children }: { children: React.Re
       tenantPlan={context.tenant.plan}
       memberships={context.memberships}
       activeTenantId={context.tenantId}
-      userEmail={context.user.email ?? ""}
+      userEmail={context.user.email ?? ''}
       role={context.role}
       runtimeConfig={context.runtimeConfig}
+      openAccess={context.openAccess}
+      isPlatformAdmin={context.isPlatformAdmin}
     >
       {children}
     </AppShell>

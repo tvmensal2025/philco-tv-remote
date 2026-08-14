@@ -1,4 +1,4 @@
-# ReelOps
+# CenaPronta
 
 Produto multi-tenant para transformar momentos capturados por quatro câmeras de restaurante em Reels verticais. O sistema usa Supabase para autenticação e dados, Redis/BullMQ para filas, FFmpeg para renderização e o MinIO existente na VPS para mídia privada.
 
@@ -12,9 +12,9 @@ Produto multi-tenant para transformar momentos capturados por quatro câmeras de
 - Renderização 1080×1920 com áudio da câmera quando disponível.
 - Biblioteca, player, download, aprovação, descarte e retry.
 - Estilos Natural, Dinâmico e Cinematográfico.
-- URLs temporárias para mídia privada; `/raw` nunca precisa ser público.
+- URLs temporárias para mídia privada; `cenapronta/raw` nunca precisa ser público.
 - Upload de NVR por URL assinada e confirmação de recebimento.
-- Retenção automática do prefixo `/raw` no MinIO.
+- Retenção automática do prefixo `cenapronta/raw` no MinIO.
 - Publicação opcional no Instagram profissional via Meta Graph API.
 - Configuração, healthchecks, heartbeat do worker, rate limit e auditoria de estados.
 - Docker, migrations automáticas e CI do GitHub.
@@ -24,15 +24,15 @@ Produto multi-tenant para transformar momentos capturados por quatro câmeras de
 ```text
 Câmeras / NVR
     ↓ segmentos MP4
-ReelOps Ingest API → MinIO /raw
+ReelOps Ingest API → MinIO cenapronta/raw/...
                          ↓
 Supabase ← API web → Redis / BullMQ
                          ↓
                   Worker FFmpeg
                          ↓
-             MinIO /generated/reels
+             MinIO cenapronta/people/.../reels
                          ↓
-             Revisão / exportação / Instagram
+             Revisão / exportação / WhatsApp
 ```
 
 ## Instalação na VPS
@@ -56,7 +56,7 @@ Se as variáveis ainda estiverem com `CHANGE_ME`, o painel web inicia em modo de
 
 ### Configurações obrigatórias
 
-Abra `http://IP_DA_VPS:3000/setup` antes de preencher as ENVs. A página explica cada variável sem exibir segredos. Depois de configurado, o mesmo checklist fica em **Configurações**.
+Abra o ReelOps. Se o `.env` ainda estiver com placeholders, a tela de login lista as variáveis obrigatórias sem exibir segredos. Depois de configurado, o mesmo checklist fica em **Configurações**.
 
 No Supabase, configure:
 
@@ -69,7 +69,7 @@ No MinIO:
 
 - A conta informada deve poder criar/ler/gravar no bucket configurado.
 - O worker cria o bucket se ele não existir.
-- Com permissão de lifecycle, o worker aplica `RAW_RETENTION_DAYS` apenas em `/raw/`; sem ela, o processamento continua e a retenção deve ser criada no console do MinIO.
+- Com permissão de lifecycle, o worker aplica `RAW_RETENTION_DAYS` apenas em `cenapronta/raw/`; sem ela, o processamento continua e a retenção deve ser criada no console do MinIO.
 - Reels gerados não são apagados por essa regra.
 
 Se o MinIO roda diretamente na VPS, use `MINIO_ENDPOINT=host.docker.internal`. Se estiver na mesma rede Docker com o nome `minio`, use `MINIO_ENDPOINT=minio`.
@@ -113,10 +113,12 @@ Corpo da primeira chamada:
 }
 ```
 
-O caminho final segue:
+O caminho final segue o dia civil em `America/Sao_Paulo` (não a data UTC):
 
 ```text
-raw/{tenant_id}/{restaurant_id}/camera-{posição}/YYYY/MM/DD/{timestamp_ISO}.mp4
+cenapronta/raw/{tenant_id}/{restaurant_id}/camera-{posição}/{YYYY-MM-DD}/{timestamp_ISO}.mp4
+cenapronta/people/{tenant_id}/{restaurant_id}/{YYYY-MM-DD}/reels/{reel_id}/reel.mp4
+cenapronta/people/{tenant_id}/{restaurant_id}/{YYYY-MM-DD}/reels/01-titulo-xxxxxxxx.mp4
 ```
 
 `NVR_SEGMENT_SECONDS` precisa corresponder ao tamanho real do segmento produzido pelo NVR. Para reduzir a espera após clicar em **Marcar Momento**, prefira segmentos entre 15 e 30 segundos.
@@ -143,7 +145,7 @@ docker compose up -d --build
 - Comece com `WORKER_CONCURRENCY=1` na KSM4.
 - Mantenha Redis, MinIO e Supabase fora da internet pública sempre que possível.
 - Coloque um proxy HTTPS (Caddy, Traefik ou Nginx) diante de `127.0.0.1:3000`.
-- Faça backup do Supabase, Redis AOF e `/generated/reels`.
+- Faça backup do Supabase, Redis AOF e `cenapronta/people`.
 - Monitore `/api/health` pela tela de Configurações.
 
 ## Verificação antes de publicar código

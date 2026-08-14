@@ -5,6 +5,10 @@ dist
 .env
 .env.*
 !.env.example
+.turbo/
+dump.rdb
+apps/worker/revideo/output/
+apps/worker/revideo/public/runtime/
 .reelops-supabase.tmp.json
 *.tmp.json
 *.log

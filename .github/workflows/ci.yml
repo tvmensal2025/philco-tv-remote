@@ -18,8 +18,14 @@ jobs:
         with:
           node-version: 20
           cache: npm
+      - name: Install FFmpeg
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
       - run: npm ci
+      - run: npm run build -w @reelops/shared
       - run: npm run typecheck
+      - run: npm run test:security
+      - run: npm test -w @reelops/shared
+      - run: npm test -w @reelops/worker
       - run: npm run build
       - run: npm run test:video
       - run: npm audit --omit=dev --audit-level=high
@@ -29,5 +35,14 @@ jobs:
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
+      - name: Validate Compose
+        run: |
+          cp .env.example .env
+          docker compose config --quiet
+          docker compose config --services
       - run: docker build -f apps/web/Dockerfile -t reelops-web:test .
       - run: docker build -f apps/worker/Dockerfile -t reelops-worker:test .
+      - name: Validate production runtimes
+        run: |
+          docker run --rm --entrypoint sh reelops-worker:test -c 'test "$(id -u)" -ne 0 && node --version && ffmpeg -version && ffprobe -version && node -e "import(\"@reelops/shared\")"'
+          docker run --rm --entrypoint sh reelops-web:test -c 'test "$(id -u)" -ne 0 && node --version && test -f apps/web/server.js'

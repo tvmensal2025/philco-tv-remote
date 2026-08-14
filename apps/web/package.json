@@ -6,25 +6,38 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "typecheck": "next typegen && tsc --noEmit"
+    "typecheck": "next typegen && tsc --noEmit",
+    "test": "vitest run"
   },
   "dependencies": {
+    "@radix-ui/react-slot": "^1.3.3",
     "@reelops/shared": "*",
     "@supabase/ssr": "0.12.4",
     "@supabase/supabase-js": "2.112.3",
     "bullmq": "^5.34.3",
+    "class-variance-authority": "^0.7.1",
+    "clsx": "^2.1.1",
     "ioredis": "^5.4.2",
-    "lucide-react": "1.31.0",
+    "lucide-react": "^1.31.0",
     "minio": "^8.0.3",
     "next": "^16.3.0",
+    "next-themes": "^0.4.6",
+    "radix-ui": "^1.6.7",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
+    "recharts": "^3.8.0",
+    "sonner": "^2.0.8",
+    "tailwind-merge": "^3.6.0",
     "zod": "^3.23.8"
   },
   "devDependencies": {
+    "@tailwindcss/postcss": "^4.3.3",
     "@types/node": "^22.10.2",
     "@types/react": "19.2.18",
     "@types/react-dom": "19.2.3",
+    "postcss": "^8.5.26",
+    "tailwindcss": "^4.3.3",
+    "tailwindcss-animate": "^1.0.7",
     "typescript": "^5.7.2"
   }
 }
