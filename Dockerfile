@@ -1,5 +1,6 @@
-# EasyPanel worker: Build Path vazio, Dockerfile Path = Dockerfile.
-# Contexto tem de ser a raiz do repo (package.json + apps/ + packages/).
+# EasyPanel worker: aba Fonte/Build = Dockerfile (não Nixpacks).
+# Build Path vazio, Dockerfile Path = Dockerfile, depois Force Rebuild.
+# Sem domínio público — este processo não escuta HTTP.
 FROM node:22-bookworm-slim AS build
 WORKDIR /app
 COPY package.json package-lock.json ./
@@ -13,6 +14,7 @@ COPY apps/worker apps/worker
 RUN npm run build -w @reelops/shared && npm run build -w @reelops/worker
 
 FROM node:22-bookworm-slim AS runtime
+RUN node -e "if (Number(process.versions.node.split('.')[0]) < 22) { console.error('Need Node 22+, got', process.version); process.exit(1) }"
 RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg ca-certificates && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 ENV NODE_ENV=production

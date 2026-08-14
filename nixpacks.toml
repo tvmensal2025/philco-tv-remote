@@ -1,0 +1,12 @@
+# EasyPanel cai em Nixpacks (Node 20) se o builder não for Dockerfile.
+# supabase-js 2.112 exige WebSocket nativo (Node 22) ou o polyfill `ws`.
+providers = ["node"]
+
+[variables]
+NIXPACKS_NODE_VERSION = "22"
+
+[phases.setup]
+aptPkgs = ["ffmpeg", "ca-certificates"]
+
+[start]
+cmd = "node apps/worker/dist/index.js"
