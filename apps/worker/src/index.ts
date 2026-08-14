@@ -264,10 +264,14 @@ async function sweepDailyDigests() {
   }
 }
 
+let heartbeatInFlight = false;
+
 async function heartbeat() {
+  if (heartbeatInFlight) return;
+  heartbeatInFlight = true;
   const now = new Date().toISOString();
-  await Promise.all([
-    db.from('worker_nodes').upsert({
+  try {
+    const { error } = await db.from('worker_nodes').upsert({
       id: workerId,
       last_seen_at: now,
       metadata: {
@@ -292,9 +296,12 @@ async function heartbeat() {
         visionCredential: configuredVisionKind() === 'heuristic' ? 'missing' : 'configured',
         rawLifecycle: runtimeStatus.rawLifecycle,
       },
-    }),
-    writeFile(path.join(config.WORK_DIR, 'worker-alive'), now, 'utf8'),
-  ]);
+    });
+    if (error) throw new Error(error.message);
+    await writeFile(path.join(config.WORK_DIR, 'worker-alive'), now, 'utf8');
+  } finally {
+    heartbeatInFlight = false;
+  }
 }
 
 async function cleanupStaleWork() {
