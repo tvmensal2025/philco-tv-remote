@@ -16,6 +16,20 @@ export function mergeAbortSignals(signals: AbortSignal[]) {
   return controller.signal;
 }
 
+export async function withTimeout<T>(promise: PromiseLike<T>, ms: number, label: string) {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<T>((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 export function supabaseFetch(input: RequestInfo | URL, init?: RequestInit) {
   const timeout = AbortSignal.timeout(SUPABASE_FETCH_TIMEOUT_MS);
   return fetch(input, {

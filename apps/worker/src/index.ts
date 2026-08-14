@@ -23,6 +23,7 @@ import {
 } from './engine/job-recovery.js';
 import { setStatus } from './pipeline/status.js';
 import { bootstrapStorage } from './storage-lifecycle.js';
+import { SUPABASE_FETCH_TIMEOUT_MS, withTimeout } from './supabase-fetch.js';
 
 await bootstrapStorage({
   minio,
@@ -270,36 +271,47 @@ async function heartbeat() {
   if (heartbeatInFlight) return;
   heartbeatInFlight = true;
   const now = new Date().toISOString();
+  const controller = new AbortController();
+  const abortTimer = setTimeout(() => controller.abort(), SUPABASE_FETCH_TIMEOUT_MS);
   try {
-    const { error } = await db.from('worker_nodes').upsert({
-      id: workerId,
-      last_seen_at: now,
-      metadata: {
-        hostname: hostname(),
-        video: videoConcurrency,
-        index: config.INDEX_WORKER_CONCURRENCY,
-        highlight: config.HIGHLIGHT_WORKER_CONCURRENCY,
-        render: config.RENDER_WORKER_CONCURRENCY,
-        ffmpegThreads: config.FFMPEG_THREADS,
-        renderProfile: config.RENDER_PROFILE,
-        gemini: Boolean(config.GEMINI_API_KEY),
-        geminiBlocked: runtimeStatus.geminiBlocked,
-        openai: Boolean(config.OPENAI_API_KEY),
-        visionProvider: configuredVisionKind(),
-        visionModel:
-          configuredVisionKind() === 'openai'
-            ? config.OPENAI_MODEL
-            : configuredVisionKind() === 'gemini'
-              ? config.GEMINI_MODEL
-              : 'none',
-        vision_real: isRealVisionProvider(configuredVisionKind()),
-        visionCredential: configuredVisionKind() === 'heuristic' ? 'missing' : 'configured',
-        rawLifecycle: runtimeStatus.rawLifecycle,
-      },
-    });
-    if (error) throw new Error(error.message);
+    const result = (await withTimeout(
+      db
+        .from('worker_nodes')
+        .upsert({
+          id: workerId,
+          last_seen_at: now,
+          metadata: {
+            hostname: hostname(),
+            video: videoConcurrency,
+            index: config.INDEX_WORKER_CONCURRENCY,
+            highlight: config.HIGHLIGHT_WORKER_CONCURRENCY,
+            render: config.RENDER_WORKER_CONCURRENCY,
+            ffmpegThreads: config.FFMPEG_THREADS,
+            renderProfile: config.RENDER_PROFILE,
+            gemini: Boolean(config.GEMINI_API_KEY),
+            geminiBlocked: runtimeStatus.geminiBlocked,
+            openai: Boolean(config.OPENAI_API_KEY),
+            visionProvider: configuredVisionKind(),
+            visionModel:
+              configuredVisionKind() === 'openai'
+                ? config.OPENAI_MODEL
+                : configuredVisionKind() === 'gemini'
+                  ? config.GEMINI_MODEL
+                  : 'none',
+            vision_real: isRealVisionProvider(configuredVisionKind()),
+            visionCredential: configuredVisionKind() === 'heuristic' ? 'missing' : 'configured',
+            rawLifecycle: runtimeStatus.rawLifecycle,
+          },
+        })
+        .abortSignal(controller.signal),
+      SUPABASE_FETCH_TIMEOUT_MS,
+      'heartbeat upsert',
+    )) as { error: { message: string } | null };
+    if (result.error) throw new Error(result.error.message);
     await writeFile(path.join(config.WORK_DIR, 'worker-alive'), now, 'utf8');
+    log.info({ workerId }, 'heartbeat ok');
   } finally {
+    clearTimeout(abortTimer);
     heartbeatInFlight = false;
   }
 }
@@ -361,22 +373,31 @@ publishing.on('failed', (job, error) =>
 );
 
 await heartbeat();
-await sweepPendingRecordings().catch((error) => log.warn({ error }, 'pending index sweep skipped'));
-await sweepDailyDigests().catch((error) => log.warn({ error }, 'daily digest sweep skipped'));
-await reconcileStaleVideoJobs().catch((error) =>
-  log.warn({ error }, 'stale video job reconcile skipped'),
-);
+log.info({ workerId }, 'heartbeat loop started');
 const heartbeatTimer = setInterval(
   () => void heartbeat().catch((error) => log.error({ error }, 'heartbeat failed')),
   30_000,
 );
 const sweepTimer = setInterval(() => {
-  void sweepPendingRecordings().catch((error) => log.warn({ error }, 'pending index sweep failed'));
-  void sweepDailyDigests().catch((error) => log.warn({ error }, 'daily digest sweep failed'));
-  void reconcileStaleVideoJobs().catch((error) =>
+  void withTimeout(sweepPendingRecordings(), 20_000, 'pending index sweep').catch((error) =>
+    log.warn({ error }, 'pending index sweep failed'),
+  );
+  void withTimeout(sweepDailyDigests(), 20_000, 'daily digest sweep').catch((error) =>
+    log.warn({ error }, 'daily digest sweep failed'),
+  );
+  void withTimeout(reconcileStaleVideoJobs(), 20_000, 'stale video job reconcile').catch((error) =>
     log.warn({ error }, 'stale video job reconcile failed'),
   );
 }, 60_000);
+void withTimeout(sweepPendingRecordings(), 20_000, 'pending index sweep').catch((error) =>
+  log.warn({ error }, 'pending index sweep skipped'),
+);
+void withTimeout(sweepDailyDigests(), 20_000, 'daily digest sweep').catch((error) =>
+  log.warn({ error }, 'daily digest sweep skipped'),
+);
+void withTimeout(reconcileStaleVideoJobs(), 20_000, 'stale video job reconcile').catch((error) =>
+  log.warn({ error }, 'stale video job reconcile skipped'),
+);
 
 async function shutdown() {
   clearInterval(heartbeatTimer);

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { mergeAbortSignals, SUPABASE_FETCH_TIMEOUT_MS } from './supabase-fetch.js';
+import { mergeAbortSignals, SUPABASE_FETCH_TIMEOUT_MS, withTimeout } from './supabase-fetch.js';
 
 describe('mergeAbortSignals', () => {
   it('returns the only signal', () => {
@@ -20,5 +20,13 @@ describe('mergeAbortSignals', () => {
 describe('supabase fetch timeout', () => {
   it('uses a 15s budget so a hung keep-alive cannot freeze heartbeats', () => {
     expect(SUPABASE_FETCH_TIMEOUT_MS).toBe(15_000);
+  });
+});
+
+describe('withTimeout', () => {
+  it('rejects a hung promise so boot cannot block the heartbeat loop', async () => {
+    await expect(withTimeout(new Promise(() => {}), 20, 'sweep')).rejects.toThrow(
+      'sweep timed out after 20ms',
+    );
   });
 });
