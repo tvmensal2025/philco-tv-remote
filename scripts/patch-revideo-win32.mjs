@@ -1,5 +1,10 @@
-import { readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
+
+if (process.platform !== 'win32') {
+  console.log('skip: linux/mac does not need the Revideo win32 patch');
+  process.exit(0);
+}
 
 function patch(file, find, replace, label) {
   const source = readFileSync(file, 'utf8');

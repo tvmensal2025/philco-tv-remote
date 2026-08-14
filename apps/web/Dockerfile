@@ -4,6 +4,7 @@ COPY package.json package-lock.json ./
 COPY apps/web/package.json apps/web/package.json
 COPY apps/worker/package.json apps/worker/package.json
 COPY packages/shared/package.json packages/shared/package.json
+COPY scripts/patch-revideo-win32.mjs scripts/patch-revideo-win32.mjs
 RUN npm ci
 
 FROM deps AS build
