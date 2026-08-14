@@ -1,5 +1,5 @@
 import { Worker } from 'bullmq';
-import { calendarDay, clockHour, editPrograms, QUEUES, STORAGE_ROOT } from '@reelops/shared';
+import { calendarDay, clockHour, editPrograms, QUEUES } from '@reelops/shared';
 import { hostname } from 'node:os';
 import { mkdir, readdir, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
@@ -22,8 +22,14 @@ import {
   type StaleReel,
 } from './engine/job-recovery.js';
 import { setStatus } from './pipeline/status.js';
+import { bootstrapStorage } from './storage-lifecycle.js';
 
-await bootstrapStorage();
+await bootstrapStorage({
+  minio,
+  bucket: config.MINIO_BUCKET,
+  retentionDays: config.RAW_RETENTION_DAYS,
+  log,
+});
 await mkdir(config.WORK_DIR, { recursive: true });
 await cleanupStaleWork();
 const workerId = `${hostname()}-${process.pid}`;
@@ -289,28 +295,6 @@ async function heartbeat() {
     }),
     writeFile(path.join(config.WORK_DIR, 'worker-alive'), now, 'utf8'),
   ]);
-}
-
-async function bootstrapStorage() {
-  if (!(await minio.bucketExists(config.MINIO_BUCKET))) await minio.makeBucket(config.MINIO_BUCKET);
-  try {
-    const current = await minio.getBucketLifecycle(config.MINIO_BUCKET).catch(() => null);
-    const rules = (current?.Rule ?? []).filter((rule) => rule.ID !== 'reelops-raw-retention');
-    rules.push({
-      ID: 'reelops-raw-retention',
-      Status: 'Enabled',
-      Filter: { Prefix: `${STORAGE_ROOT}/raw/` },
-      Expiration: { Days: config.RAW_RETENTION_DAYS },
-    });
-    await minio.setBucketLifecycle(config.MINIO_BUCKET, { Rule: rules });
-    runtimeStatus.rawLifecycle = 'ok';
-  } catch (error) {
-    runtimeStatus.rawLifecycle = 'unconfigured';
-    log.warn(
-      { error },
-      'lifecycle configuration skipped; configure cenapronta/raw/ retention in MinIO',
-    );
-  }
 }
 
 async function cleanupStaleWork() {
