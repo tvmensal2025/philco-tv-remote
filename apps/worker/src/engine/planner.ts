@@ -35,6 +35,8 @@ export type ReelPlanScene = {
   cropFilter?: string;
   shotStyle?: string;
   reframe?: { strategy: string; trackId: number | null; qc?: unknown };
+  fxAssetId?: string;
+  fxMode?: 'none' | 'auto';
 };
 
 export type ReelPlan = {
@@ -64,6 +66,11 @@ export type ReelPlan = {
   bestFrames?: EditDecision['bestFrames'];
   framesAnalyzed?: number;
   captionStrategy?: 'none' | 'full';
+  music?: {
+    startSeconds: number;
+    bpm?: number;
+    confidence?: number;
+  };
 };
 
 export type HouseCutTake = {

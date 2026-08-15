@@ -36,6 +36,7 @@ export function applyCompiledGraph(
       fadeOut: scene.fadeOut,
       punchIn: scene.punchIn,
       motion: scene.motion,
+      fxAssetId: scene.fxAssetId,
     };
   });
   if (!scenes.length) throw new Error('Export failed. Reason: timeline has no video clips');
