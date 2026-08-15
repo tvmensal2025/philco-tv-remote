@@ -124,12 +124,12 @@ export default function SettingsPanel({
       <div className="space-y-6">
         <div className="grid gap-3 sm:grid-cols-2">
           <Link
-            href="/enviar"
+            href="/reels"
             className="rounded-xl border bg-card p-4 shadow-sm transition-colors hover:bg-muted/40"
           >
-            <p className="text-sm font-semibold">Enviar do celular</p>
+            <p className="text-sm font-semibold">Filmes</p>
             <p className="mt-1 text-sm text-muted-foreground">
-              Sem HD: baixe no app da câmera e mande para o CenaPronta.
+              Revisar, recortar uma cena e baixar o MP4.
             </p>
           </Link>
           <Link

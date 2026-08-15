@@ -16,6 +16,9 @@ import {
   videoJobSchema,
   canPromoteFinalOutput,
   executionObjectKeys,
+  parseVideoProject,
+  compileVideoProject,
+  projectFromDecision,
   type VideoJob,
 } from '@reelops/shared';
 import type { Job } from 'bullmq';
@@ -80,6 +83,7 @@ import {
   preferExploredSingleCameraTimeline,
   resolveTimeline,
 } from '../engine/scene-resolver.js';
+import { applyCompiledGraph } from '../engine/project-plan.js';
 import { HIGH_QUALITY_CAMERA_SCORE } from '../engine/peak-snap.js';
 import { casaCompositionLayout } from '../composition/design-system.js';
 import { writeProgramAss } from './captions.js';
@@ -412,8 +416,20 @@ async function processClaimedVideo(
     let directorFallbackReason: string | null = null;
     let directorUsage: { prompt_tokens?: number; completion_tokens?: number } | undefined;
     let renderPlan = plan;
-    let timelineSource: 'decision_v2' | 'legacy_plan' = 'legacy_plan';
-    if (config.ENABLE_AI_DIRECTOR) {
+    let timelineSource: 'decision_v2' | 'legacy_plan' | 'video_project' = 'legacy_plan';
+    const savedProject = parseVideoProject(authoritative.videoProject);
+    const renderFromProject = Boolean(
+      authoritative.renderFromProject &&
+      savedProject.success &&
+      savedProject.data.ai?.renderFromProject,
+    );
+    if (renderFromProject && savedProject.success) {
+      renderPlan = applyCompiledGraph(plan, compileVideoProject(savedProject.data), workingClips);
+      timelineSource = 'video_project';
+      directorRequested = 'legacy';
+      directorUsed = 'legacy';
+      directorFallbackReason = 'VIDEO_PROJECT';
+    } else if (config.ENABLE_AI_DIRECTOR) {
       try {
         const ai = await decideWithAiDirector({
           plan,
@@ -876,6 +892,21 @@ async function processClaimedVideo(
         privacy_risk: plan.privacyRisk,
         recommended_use: plan.recommendedUse,
         house_cut: houseCutFromPlan(renderPlan),
+        video_project:
+          renderFromProject && savedProject.success
+            ? savedProject.data
+            : projectFromDecision({
+                decision: decisionV2,
+                takes: workingClips.map((clip) => ({
+                  recordingId: clip.recordingId ?? clip.cameraId,
+                  cameraId: clip.cameraId,
+                  cameraPosition: clip.position,
+                  cameraLabel: `C${clip.position}`,
+                  durationMs: Math.round((clip.windowDurationSeconds ?? 20) * 1000),
+                  hasAudio: clip.hasAudio,
+                })),
+                name: plan.caption || undefined,
+              }),
         camera_rankings: plan.cameraRankings,
         best_frames: plan.bestFrames,
         frames_by_camera: framesByCamera,
@@ -1054,7 +1085,7 @@ async function verifyAuthoritativeData(payload: VideoJob) {
   const { data: reel, error } = await db
     .from('reels')
     .select(
-      'id,tenant_id,restaurant_id,moment_id,status,moments(occurred_at,window_start,window_end),restaurants(name,settings,timezone)',
+      'id,tenant_id,restaurant_id,moment_id,status,metadata,moments(occurred_at,window_start,window_end),restaurants(name,settings,timezone)',
     )
     .eq('id', payload.reelId)
     .eq('tenant_id', payload.tenantId)
@@ -1085,6 +1116,10 @@ async function verifyAuthoritativeData(payload: VideoJob) {
   const brand = brandFromRestaurantSettings(restaurant.settings);
   const enableRevideo =
     restaurant.settings?.enableRevideo === true || restaurant.settings?.videoPipeline === 'v2';
+  const metadata =
+    reel.metadata && typeof reel.metadata === 'object'
+      ? (reel.metadata as Record<string, unknown>)
+      : {};
   return {
     style,
     prompt:
@@ -1095,5 +1130,7 @@ async function verifyAuthoritativeData(payload: VideoJob) {
     brand,
     restaurantName: typeof restaurant.name === 'string' ? restaurant.name : 'Casa',
     enableRevideo,
+    videoProject: metadata.video_project,
+    renderFromProject: metadata.render_from_project === true,
   };
 }

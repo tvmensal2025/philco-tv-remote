@@ -109,6 +109,17 @@ export const cameraUpdateSchema = z.object({
     .regex(/^[a-zA-Z0-9/_-]+$/)
     .optional(),
   role: z.enum(cameraRoles).optional(),
+  sourceType: z.enum(['minio', 'rtsp', 'nvr']).optional(),
+  ingestMode: z.enum(['folder', 'rtsp', 'phone']).optional(),
+  rtspUrl: z.string().trim().max(800).optional(),
+  rtspHost: z.string().trim().max(120).optional(),
+  rtspPort: z.string().trim().max(8).optional(),
+  rtspUsername: z.string().trim().max(80).optional(),
+  rtspPassword: z.string().max(200).optional(),
+  rtspBrand: z.enum(['intelbras', 'hikvision', 'dahua', 'xm', 'generic']).optional(),
+  rtspChannel: z.number().int().min(1).max(16).optional(),
+  rtspTransport: z.enum(['tcp', 'udp']).optional(),
+  folderPath: z.string().trim().max(400).optional(),
 });
 
 export const ingestPresignSchema = z.object({
@@ -345,3 +356,12 @@ export * from './program-timeline.js';
 export * from './scale.js';
 export * from './quality-first.js';
 export * from './scene-coherence.js';
+export * from './beat-grid.js';
+export * from './reel-duration.js';
+export * from './fx-catalog.js';
+export * from './rtsp.js';
+export * from './video-project.js';
+export * from './video-project-ops.js';
+export * from './video-project-from-decision.js';
+export * from './video-project-compiler.js';
+export * from './video-project-preview.js';

@@ -34,6 +34,7 @@ export default async function ReelPage({ params }: { params: Promise<{ id: strin
     moment_id: string | null;
     status: string;
     title: string | null;
+    caption?: string | null;
     thumbnail_path: string | null;
     output_path: string | null;
     progress: number | null;
