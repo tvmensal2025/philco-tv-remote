@@ -20,6 +20,7 @@ COPY --from=build --chown=node:node /app/apps/worker/dist apps/worker/dist
 COPY --from=build --chown=node:node /app/apps/worker/package.json apps/worker/package.json
 COPY --from=build --chown=node:node /app/packages/shared/dist packages/shared/dist
 COPY --from=build --chown=node:node /app/packages/shared/package.json packages/shared/package.json
+COPY --chown=node:node assets/music assets/music
 RUN mkdir -p /tmp/reelops && chown node:node /tmp/reelops
 USER node
 CMD ["node", "apps/worker/dist/index.js"]

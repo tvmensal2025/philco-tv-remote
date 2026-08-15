@@ -169,7 +169,7 @@ describe('four-program editor', () => {
     expect(span).toBeGreaterThan(15);
     expect(Math.max(...starts)).toBeGreaterThan(20);
     expect(plan.duration).toBeGreaterThan(14);
-    expect(plan.duration).toBeLessThan(40);
+    expect(plan.duration).toBeLessThan(70);
   });
 
   it('treats a strong Vision ranking as high-quality even if the editorial score is mid', () => {
@@ -219,7 +219,8 @@ describe('four-program editor', () => {
       compatiblePositions: new Set([1]),
     });
     const starts = plan.scenes.map((scene) => scene.source_start_offset);
-    expect(Math.max(...starts) - Math.min(...starts)).toBeLessThan(15);
+    expect(Math.min(...starts)).toBeLessThan(8);
+    expect(Math.max(...starts) - Math.min(...starts)).toBeLessThan(32);
   });
 
   it('still compiles Casa when the room camera is missing', () => {
@@ -255,6 +256,6 @@ describe('four-program editor', () => {
       playbook: override,
     });
     expect(plan.scenes[0]?.duration).toBeLessThan(1.5);
-    expect(playbookFor('pulso').beats[0]?.durationSeconds).toBe(1.9);
+    expect(playbookFor('pulso').beats[0]?.durationSeconds).toBeGreaterThan(5);
   });
 });

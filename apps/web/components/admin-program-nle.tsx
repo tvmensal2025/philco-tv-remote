@@ -1764,7 +1764,7 @@ export default function AdminProgramNle(props: {
               <Input
                 type="number"
                 min={8}
-                max={45}
+                max={90}
                 step={0.5}
                 value={spec.targetDuration}
                 onChange={(event) =>

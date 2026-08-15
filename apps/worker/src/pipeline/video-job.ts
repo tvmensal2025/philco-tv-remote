@@ -71,6 +71,7 @@ import {
 } from './ffmpeg.js';
 import { probeMedia } from './probe-media.js';
 import { renderComposition } from './composition.js';
+import { pickMusicBed } from './music-bed.js';
 import { decisionFromReelPlan } from '../engine/director.js';
 import { decideWithAiDirector } from '../engine/ai-director.js';
 import {
@@ -659,6 +660,7 @@ async function processClaimedVideo(
       wordmark: branding.logo && !logoPath ? copy.wordmark : null,
     });
     let voiceAsset: AudioAsset | null = null;
+    const musicBed = pickMusicBed(payload.reelId);
     const script = voiceoverScript({
       title: decision.text.title,
       subtitle: decision.text.subtitle,
@@ -705,6 +707,22 @@ async function processClaimedVideo(
       }
     }
     const renderStarted = Date.now();
+    if (musicBed) {
+      decision = {
+        ...decision,
+        audio: {
+          ...decision.audio,
+          strategy: voiceAsset
+            ? 'voiceover_plus_music'
+            : renderPlan.audio
+              ? 'ambient_plus_music'
+              : 'music_only',
+          musicGainDb: -6,
+          preserveAmbient: Boolean(renderPlan.audio),
+        },
+      };
+      decisionV2 = adaptVideoEditDecisionV1ToV2(decision);
+    }
     const requestedRenderer =
       config.ENABLE_REVIDEO && authoritative.enableRevideo && payload.program === 'casa'
         ? 'revideo'
@@ -718,6 +736,7 @@ async function processClaimedVideo(
         voicePath: voiceAsset?.path,
         logoPath,
         endCard: branding.endCard,
+        musicPath: musicBed?.source,
         workDir: dir,
       },
       requestedRenderer,
@@ -840,6 +859,14 @@ async function processClaimedVideo(
         model: plan.model,
         cameras: renderPlan.scenes.map((scene) => scene.camera_id),
         sourceAudio: Boolean(renderPlan.audio),
+        music_bed: musicBed
+          ? {
+              assetId: musicBed.assetId,
+              licenseType: musicBed.licenseType,
+              licenseReference: musicBed.licenseReference,
+              provider: musicBed.provider,
+            }
+          : null,
         program: plan.program,
         join: plan.join,
         detailedScores: plan.detailedScores,

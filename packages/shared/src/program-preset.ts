@@ -108,7 +108,7 @@ export const programPresetSpecSchema = z
     schemaVersion: z.literal('1.0'),
     program: z.enum(editPrograms),
     join: z.enum(['cut', 'dissolve']),
-    targetDuration: z.number().min(8).max(45),
+    targetDuration: z.number().min(8).max(90),
     maxShare: z.number().min(0.15).max(0.9),
     minRoles: z.number().int().min(1).max(4),
     beats: z.array(playbookBeatSchema).min(3).max(12),
@@ -147,6 +147,9 @@ export const JOIN_DEFAULT_SECONDS: Record<JoinName, number> = {
   dissolve: 0.58,
   fadeblack: 0.5,
 };
+
+/** Output length of every program — matches the owned Sofia Veo beds. */
+export const MUSIC_BED_SECONDS = 59;
 
 export const joinOverlayLabels: Record<JoinOverlayName, string> = {
   none: 'Sem FX',
@@ -450,22 +453,90 @@ export const renderEffectCatalog: CatalogEffect[] = [
   },
 ];
 
+export function joinedPlaybookSeconds(beats: PlaybookBeat[]) {
+  if (!beats.length) return 0;
+  let elapsed = beats[0]!.durationSeconds;
+  for (let index = 1; index < beats.length; index += 1) {
+    const beat = beats[index]!;
+    const overlap = beat.joinDurationSeconds ?? JOIN_DEFAULT_SECONDS[beat.join];
+    elapsed += beat.durationSeconds - overlap;
+  }
+  return Number(elapsed.toFixed(3));
+}
+
+function fillTakes(beats: PlaybookBeat[], takeCount: number): PlaybookBeat[] {
+  if (beats.length >= takeCount) return beats.map((beat) => ({ ...beat }));
+  const first = { ...beats[0]! };
+  const last = { ...beats[beats.length - 1]!, fadeOut: true };
+  const mids = beats.slice(1, -1).map((beat) => ({ ...beat, fadeIn: false, fadeOut: false }));
+  if (!mids.length) {
+    mids.push({ ...first, fadeIn: false, fadeOut: false, name: `${first.name}-loop`.slice(0, 40) });
+  }
+  const out: PlaybookBeat[] = [first];
+  let cycle = 0;
+  while (out.length < takeCount - 1) {
+    const src = mids[cycle % mids.length]!;
+    out.push({ ...src, name: `${src.name}-${out.length}`.slice(0, 40) });
+    cycle += 1;
+  }
+  out.push(last);
+  return out;
+}
+
+export function fitBeatsToMusicBed(
+  beats: PlaybookBeat[],
+  target = MUSIC_BED_SECONDS,
+): PlaybookBeat[] {
+  let next = beats.map((beat) => ({ ...beat }));
+  for (let guard = 0; guard < 8; guard += 1) {
+    const current = joinedPlaybookSeconds(next);
+    const factor = current > 0 ? target / current : 1;
+    next = next.map((beat) => ({
+      ...beat,
+      durationSeconds: Number(
+        Math.min(12, Math.max(0.8, beat.durationSeconds * factor)).toFixed(3),
+      ),
+    }));
+    const got = joinedPlaybookSeconds(next);
+    if (got > target + 0.25) {
+      const shrink = target / got;
+      next = next.map((beat) => ({
+        ...beat,
+        durationSeconds: Number(Math.max(0.8, beat.durationSeconds * shrink).toFixed(3)),
+      }));
+    }
+    const fitted = joinedPlaybookSeconds(next);
+    if (Math.abs(fitted - target) <= 1.5 || next.length >= 12) return next;
+    if (fitted >= target - 1.5) return next;
+    const mid = next[Math.min(1, Math.max(0, next.length - 2))]!;
+    next.splice(next.length - 1, 0, {
+      ...mid,
+      fadeIn: false,
+      fadeOut: false,
+      name: `${mid.name}-${next.length}`.slice(0, 40),
+    });
+  }
+  return next;
+}
+
 function spec(
   program: EditProgram,
   join: 'cut' | 'dissolve',
-  targetDuration: number,
+  _targetDuration: number,
   maxShare: number,
   minRoles: number,
   beats: PlaybookBeat[],
 ): ProgramPresetSpec {
+  const takeCount = program === 'pulso' ? Math.max(8, beats.length) : Math.max(7, beats.length);
+  const fitted = fitBeatsToMusicBed(fillTakes(beats, takeCount), MUSIC_BED_SECONDS);
   return programPresetSpecSchema.parse({
     schemaVersion: '1.0',
     program,
     join,
-    targetDuration,
+    targetDuration: MUSIC_BED_SECONDS,
     maxShare,
     minRoles,
-    beats,
+    beats: fitted,
     captions: { strategy: 'full' },
     branding: defaultBrandingFor(program),
   });

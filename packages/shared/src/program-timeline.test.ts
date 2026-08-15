@@ -15,11 +15,11 @@ import {
 } from './program-timeline.js';
 
 describe('program timeline editor', () => {
-  it('builds Pulso as eight hard cuts totaling about 16s with overlap', () => {
+  it('builds Pulso as eight hard cuts totaling about 59s with overlap', () => {
     const { clips, duration } = buildProgramTimeline(cloneValidatedSpec('pulso'));
     expect(clips).toHaveLength(8);
-    expect(duration).toBeGreaterThan(14);
-    expect(duration).toBeLessThan(16);
+    expect(duration).toBeGreaterThan(57);
+    expect(duration).toBeLessThan(61);
     expect(clips[1]?.joinOverlap).toBeCloseTo(0.04);
   });
 

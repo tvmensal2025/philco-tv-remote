@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   cloneValidatedSpec,
+  joinedPlaybookSeconds,
   playbookFor,
   programPresetSpecSchema,
   renderEffectCatalog,
@@ -23,7 +24,17 @@ describe('validated four-program standard', () => {
     expect(pulso.join).toBe('cut');
     expect(pulso.beats.every((beat) => beat.join === 'cut')).toBe(true);
     expect(new Set(pulso.beats.flatMap((beat) => beat.roles)).size).toBe(4);
-    expect(pulso.beats.at(-1)?.durationSeconds).toBe(2.6);
+    expect(pulso.targetDuration).toBe(59);
+    expect(pulso.beats.at(-1)?.fadeOut).toBe(true);
+  });
+
+  it('locks every program to the 59s music bed', () => {
+    for (const program of ['casa', 'oficio', 'assinatura', 'pulso'] as const) {
+      const book = specToPlaybook(validatedProgramPresets[program]);
+      expect(book.targetDuration).toBe(59);
+      expect(joinedPlaybookSeconds(book.beats)).toBeGreaterThan(57);
+      expect(joinedPlaybookSeconds(book.beats)).toBeLessThan(61);
+    }
   });
 
   it('lets Casa open on the strongest camera, not automatic ambience', () => {
@@ -59,7 +70,7 @@ describe('validated four-program standard', () => {
       })),
     });
     expect(playbookFor('pulso', override).beats[0]?.durationSeconds).toBe(1.2);
-    expect(playbookFor('pulso').beats[0]?.durationSeconds).toBe(1.9);
+    expect(playbookFor('pulso').beats[0]?.durationSeconds).toBeGreaterThan(5);
   });
 
   it('only offers real FFmpeg effects as selectable', () => {

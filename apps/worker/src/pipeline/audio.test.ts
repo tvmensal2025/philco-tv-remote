@@ -4,6 +4,7 @@ import {
   deliveryAudioEncodeArgs,
   deliveryAudioFilter,
   duckingFilter,
+  mixBackgroundMusicGraph,
   mixVoiceoverGraph,
 } from './audio.js';
 
@@ -64,5 +65,19 @@ describe('audio architecture', () => {
         allowedUsage: [],
       }),
     ).toThrow(/MUSIC_LICENSE_UNKNOWN/);
+  });
+
+  it('lays the owned bed under ambient for a 59s reel', () => {
+    const graph = mixBackgroundMusicGraph({
+      musicInputIndex: 5,
+      ambientInputIndex: 0,
+      ambientStart: 2,
+      duration: 59,
+    });
+    expect(graph).toContain('[5:a]atrim=start=0:duration=59');
+    expect(graph).toContain('[0:a]atrim=start=2:duration=59');
+    expect(graph).toContain('amix=inputs=2');
+    expect(graph).toContain('loudnorm=I=-14');
+    expect(graph).toContain('[outa]');
   });
 });

@@ -1,5 +1,11 @@
 import type { EditProgram, Playbook } from '@reelops/shared';
-import { playbookFor, programPresetSpecSchema, specToPlaybook } from '@reelops/shared';
+import {
+  fitBeatsToMusicBed,
+  MUSIC_BED_SECONDS,
+  playbookFor,
+  programPresetSpecSchema,
+  specToPlaybook,
+} from '@reelops/shared';
 import { db, log } from '../services.js';
 
 const CACHE_MS = 15_000;
@@ -23,7 +29,11 @@ export async function loadPublishedPlaybooks(): Promise<Partial<Record<EditProgr
       const parsed = programPresetSpecSchema.safeParse(row.spec);
       if (!parsed.success) continue;
       if (parsed.data.program !== row.program) continue;
-      books[parsed.data.program] = specToPlaybook(parsed.data);
+      books[parsed.data.program] = specToPlaybook({
+        ...parsed.data,
+        targetDuration: MUSIC_BED_SECONDS,
+        beats: fitBeatsToMusicBed(parsed.data.beats, MUSIC_BED_SECONDS),
+      });
     }
     cache = { at: Date.now(), books };
     return books;

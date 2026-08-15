@@ -18,6 +18,7 @@ export type CompositionInput = {
   voicePath?: string | null;
   logoPath?: string | null;
   endCard?: boolean;
+  musicPath?: string | null;
   workDir: string;
 };
 
@@ -53,7 +54,7 @@ export class FFmpegCompositionRenderer implements CompositionRenderer {
       input.output,
       input.captionsPath,
       input.voicePath,
-      { logoPath: input.logoPath, endCard: input.endCard },
+      { logoPath: input.logoPath, endCard: input.endCard, musicPath: input.musicPath },
     );
     return {
       ...result,
@@ -75,6 +76,7 @@ export class RevideoCompositionRenderer implements CompositionRenderer {
     const timeline = await renderVertical(input.plan, base, input.captionsPath, input.voicePath, {
       logoPath: input.logoPath,
       endCard: input.endCard,
+      musicPath: input.musicPath,
     });
     const ffmpegTimelineMs = Date.now() - ffmpegStarted;
 

@@ -6,7 +6,13 @@ import { config } from '../config.js';
 import { ffmpegSlot } from '../engine/provider-slots.js';
 import { log } from '../services.js';
 import type { ReelPlan } from '../engine/planner.js';
-import { deliveryAudioEncodeArgs, deliveryAudioFilter, mixVoiceoverGraph } from './audio.js';
+import {
+  deliveryAudioEncodeArgs,
+  deliveryAudioFilter,
+  mixBackgroundMusicGraph,
+  mixVoiceoverGraph,
+} from './audio.js';
+import { pickMusicBed } from './music-bed.js';
 import { ffmpegSubtitlesFilter } from './captions.js';
 import {
   parseLoudness,
@@ -39,6 +45,7 @@ export { isFfmpegMemoryError, renderProfileOrder } from './render-profile.js';
 export type VerticalBrandPass = {
   logoPath?: string | null;
   endCard?: boolean;
+  musicPath?: string | null;
 };
 
 function ffmpegGlobals() {
@@ -381,10 +388,17 @@ async function renderFinished(
     const source = scene.source_recording_path.replaceAll('\\', '/');
     args.push(...(source.endsWith('.txt') ? ['-f', 'concat', '-safe', '0'] : []), '-i', source);
   });
+  const musicPath = (
+    brand?.musicPath ?? pickMusicBed(plan.scenes[0]?.camera_id ?? plan.program)?.source
+  )?.replaceAll('\\', '/');
+  if (musicPath) args.push('-i', musicPath);
   if (voicePath) args.push('-i', voicePath.replaceAll('\\', '/'));
   const logoPath = brand?.logoPath ? brand.logoPath.replaceAll('\\', '/') : null;
   if (logoPath) args.push('-i', logoPath);
-  const logoInputIndex = logoPath ? plan.scenes.length + (voicePath ? 1 : 0) : undefined;
+  let nextInput = plan.scenes.length;
+  const musicInputIndex = musicPath ? nextInput++ : undefined;
+  const voiceInputIndex = voicePath ? nextInput++ : undefined;
+  const logoInputIndex = logoPath ? nextInput++ : undefined;
 
   if (profile === 'safe') {
     const videoFilters = plan.scenes.map((scene, index) =>
@@ -401,8 +415,12 @@ async function renderFinished(
       output,
       captionsPath,
       undefined,
-      voicePath,
-      { logoInputIndex, endCard: Boolean(brand?.endCard) },
+      {
+        logoInputIndex,
+        endCard: Boolean(brand?.endCard),
+        musicInputIndex,
+        voiceInputIndex,
+      },
     );
     return;
   }
@@ -441,17 +459,12 @@ async function renderFinished(
   filters.push(
     masterFinish(chain.duration, fadeOut, profile === 'high' ? 'high' : 'standard', overlay.output),
   );
-  await mapAndEncode(
-    plan,
-    args,
-    filters,
-    '[basev]',
-    output,
-    captionsPath,
-    chain.duration,
-    voicePath,
-    { logoInputIndex, endCard: Boolean(brand?.endCard) },
-  );
+  await mapAndEncode(plan, args, filters, '[basev]', output, captionsPath, chain.duration, {
+    logoInputIndex,
+    endCard: Boolean(brand?.endCard),
+    musicInputIndex,
+    voiceInputIndex,
+  });
 }
 
 async function mapAndEncode(
@@ -462,8 +475,12 @@ async function mapAndEncode(
   output: string,
   captionsPath?: string | null,
   audioDuration?: number,
-  voicePath?: string | null,
-  brand?: { logoInputIndex?: number; endCard?: boolean },
+  brand?: {
+    logoInputIndex?: number;
+    endCard?: boolean;
+    musicInputIndex?: number;
+    voiceInputIndex?: number;
+  },
 ) {
   const graph = [...filters];
   let map = videoMap;
@@ -480,32 +497,42 @@ async function mapAndEncode(
     graph.push(`${map}${ffmpegSubtitlesFilter(captionsPath)}[capv]`);
     map = '[capv]';
   }
-  if (voicePath) {
-    const audioIndex = plan.audio
-      ? plan.scenes.findIndex(
-          (scene) => scene.source_recording_path === plan.audio?.source_recording_path,
-        )
-      : -1;
+  const audioIndex = plan.audio
+    ? plan.scenes.findIndex(
+        (scene) => scene.source_recording_path === plan.audio?.source_recording_path,
+      )
+    : -1;
+  const ambientIndex = plan.audio ? (audioIndex >= 0 ? audioIndex : 0) : undefined;
+  const hasVoice = typeof brand?.voiceInputIndex === 'number';
+  const hasMusic = typeof brand?.musicInputIndex === 'number';
+  if (hasMusic) {
+    graph.push(
+      mixBackgroundMusicGraph({
+        musicInputIndex: brand!.musicInputIndex!,
+        duration,
+        ambientInputIndex: ambientIndex,
+        ambientStart: plan.audio?.source_start_offset,
+        voiceInputIndex: hasVoice ? brand!.voiceInputIndex : undefined,
+      }),
+    );
+  } else if (hasVoice) {
     graph.push(
       mixVoiceoverGraph({
-        ambientInputIndex: plan.audio ? (audioIndex >= 0 ? audioIndex : 0) : undefined,
+        ambientInputIndex: ambientIndex,
         ambientStart: plan.audio?.source_start_offset,
-        voiceInputIndex: plan.scenes.length,
+        voiceInputIndex: brand!.voiceInputIndex!,
         duration,
       }),
     );
   } else if (plan.audio) {
-    const audioIndex = plan.scenes.findIndex(
-      (scene) => scene.source_recording_path === plan.audio?.source_recording_path,
-    );
-    const inputIndex = audioIndex >= 0 ? audioIndex : 0;
+    const inputIndex = ambientIndex ?? 0;
     const fadeOutStart = Math.max(0, duration - 0.8);
     graph.push(
       `[${inputIndex}:a]atrim=start=${plan.audio.source_start_offset}:duration=${duration},asetpts=PTS-STARTPTS,afade=t=in:st=0:d=0.55,afade=t=out:st=${fadeOutStart}:d=0.8,${deliveryAudioFilter()},loudnorm=I=-16:TP=-1.5:LRA=11[outa]`,
     );
   }
   args.push('-filter_complex', graph.join(';'), '-map', map);
-  if (voicePath || plan.audio) args.push('-map', '[outa]', ...deliveryAudioEncodeArgs());
+  if (hasMusic || hasVoice || plan.audio) args.push('-map', '[outa]', ...deliveryAudioEncodeArgs());
   else args.push('-an');
   args.push(
     '-c:v',
