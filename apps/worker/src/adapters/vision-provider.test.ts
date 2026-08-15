@@ -13,6 +13,12 @@ describe('pickVisionProvider', () => {
     ).toBe('openai');
   });
 
+  it('uses OpenAI when preference is openai even if a Gemini key exists', () => {
+    expect(
+      pickVisionProvider({ openaiKey: 'sk-test', geminiKey: 'AIza', preference: 'openai' }),
+    ).toBe('openai');
+  });
+
   it('uses Gemini when OpenAI is absent', () => {
     expect(pickVisionProvider({ geminiKey: 'AIza', preference: 'auto' })).toBe('gemini');
   });

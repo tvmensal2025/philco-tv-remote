@@ -67,6 +67,7 @@ test('migrations are ordered and the hardening migration is present', () => {
     '0014_moment_client_request_id.sql',
     '0015_platform_admin.sql',
     '0016_scale_indexes.sql',
+    '0017_sofia_and_secrets.sql',
   ]);
 });
 
@@ -248,4 +249,23 @@ test('ingest and moment idempotency unique indexes exist', () => {
   assert.match(recording, /recordings_idempotency_key_uidx/);
   assert.match(moment, /moments_tenant_client_request_uidx/);
   assert.match(moment, /client_request_id/);
+});
+
+test('sofia secrets never grant password tables to the browser role', () => {
+  const sofia = migrations.find(({ name }) => name === '0017_sofia_and_secrets.sql')?.sql ?? '';
+  assert.match(sofia, /create table if not exists public\.sofia_sessions/i);
+  assert.match(sofia, /create table if not exists public\.sofia_secrets/i);
+  assert.match(sofia, /create table if not exists public\.camera_ingest_secrets/i);
+  for (const table of ['sofia_secrets', 'camera_ingest_secrets']) {
+    assert.match(
+      sofia,
+      new RegExp(
+        `revoke all privileges on table public\\.${table} from public, anon, authenticated`,
+        'i',
+      ),
+    );
+    assert.doesNotMatch(sofia, new RegExp(`grant select on table public\\.${table}`, 'i'));
+  }
+  assert.match(sofia, /grant select on table public\.sofia_sessions to authenticated/i);
+  assert.match(sofia, /create policy sofia_session_read on public.sofia_sessions\s+for select/i);
 });

@@ -156,7 +156,7 @@ export function resolveTimeline(
         source_recording_path: camera.localPath,
         source_start_offset: startMs / 1000,
         duration,
-        speed: 1,
+        speed: scene.playbackSpeed ?? 1,
         transition: transitionFromScene(scene),
         reason: `${scene.sceneRole}:${scene.shotStyle}`,
         position: camera.cameraPosition,
@@ -167,6 +167,7 @@ export function resolveTimeline(
         punchIn: scene.shotStyle === 'punch_in',
         motion: motionFromScene(scene),
         shotStyle: scene.shotStyle,
+        fxAssetId: scene.fxAssetId ?? undefined,
       },
     ];
   });

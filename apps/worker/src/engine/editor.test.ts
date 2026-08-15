@@ -148,6 +148,17 @@ describe('four-program editor', () => {
     expect(plan.scenes.length).toBeGreaterThanOrEqual(3);
   });
 
+  it('still compiles Casa when the only camera is food', () => {
+    const onlyFood = clips().filter((clip) => clip.role === 'food');
+    const plan = compileProgram({
+      clips: onlyFood,
+      program: 'casa',
+      peaksByCamera: peaks(),
+    });
+    expect(plan.scenes.length).toBeGreaterThanOrEqual(1);
+    expect(plan.scenes.every((scene) => scene.role === 'food')).toBe(true);
+  });
+
   it('spreads high-quality single-camera Casa takes across the available window', () => {
     const plan = compileProgram({
       clips: clips().map((clip) => ({ ...clip, windowDurationSeconds: 38 })),
@@ -256,6 +267,6 @@ describe('four-program editor', () => {
       playbook: override,
     });
     expect(plan.scenes[0]?.duration).toBeLessThan(1.5);
-    expect(playbookFor('pulso').beats[0]?.durationSeconds).toBeGreaterThan(5);
+    expect(playbookFor('pulso').beats[0]?.durationSeconds).toBeCloseTo(1.9);
   });
 });

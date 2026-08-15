@@ -1,7 +1,7 @@
 'use client';
 
 import { CheckCircle2, Pencil, Plus, Radio, Signal, SignalLow, Trash2, Video } from 'lucide-react';
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { toast } from 'sonner';
 import { Card, CardContent, CardFooter } from '@/components/ui/card';
@@ -19,6 +19,7 @@ import {
   selectPlaceValue,
 } from '@/lib/camera-roles';
 import ExistingCamerasGuide from '@/components/existing-cameras-guide';
+import SofiaAgent from '@/components/sofia-agent';
 
 type CameraItem = {
   id: string;
@@ -31,6 +32,17 @@ type CameraItem = {
   role?: string;
   place?: string;
   placeLabel?: string | null;
+  ingestMode?: 'folder' | 'rtsp' | 'phone';
+  rtspUrl?: string;
+  rtspHost?: string;
+  rtspPort?: string;
+  rtspUsername?: string;
+  rtspPassword?: string;
+  rtspBrand?: string;
+  rtspChannel?: number;
+  rtspHasPassword?: boolean;
+  rtspTransport?: 'tcp' | 'udp';
+  folderPath?: string;
   previewId?: string | null;
 };
 type Restaurant = { id: string; name: string };
@@ -64,6 +76,10 @@ export default function CamerasManager({
   const [editing, setEditing] = useState<Record<string, boolean>>({});
   const canConfigure = ['owner', 'admin'].includes(role);
   const visible = cameras.filter((camera) => camera.restaurant_id === restaurantId);
+
+  useEffect(() => {
+    setCameras(initial);
+  }, [initial]);
   // eslint-disable-next-line react-hooks/purity
   const now = useMemo(() => Date.now(), []);
   const onlineCount = visible.filter(
@@ -87,12 +103,32 @@ export default function CamerasManager({
         role: camera.role,
         place: camera.place,
         placeLabel: camera.placeLabel,
+        ingestMode: camera.ingestMode ?? 'folder',
+        rtspUrl: camera.rtspUrl ?? '',
+        rtspHost: camera.rtspHost ?? '',
+        rtspPort: camera.rtspPort ?? '554',
+        rtspUsername: camera.rtspUsername ?? 'admin',
+        rtspPassword: camera.rtspPassword ?? '',
+        rtspBrand: camera.rtspBrand ?? 'intelbras',
+        rtspChannel: camera.rtspChannel ?? camera.position,
+        rtspTransport: camera.rtspTransport ?? 'tcp',
+        folderPath: camera.folderPath ?? '',
       }),
     });
     const data = await response.json();
     setSaving(null);
-    if (response.ok) toast.success(`${camera.name} atualizada`);
-    else toast.error(data.error ?? 'Não foi possível salvar.');
+    if (response.ok) {
+      toast.success(`${camera.name} atualizada`);
+      patch(camera.id, {
+        rtspPassword: '',
+        rtspUrl: '',
+        rtspHasPassword:
+          camera.ingestMode === 'rtsp'
+            ? Boolean(camera.rtspHasPassword || camera.rtspPassword || camera.rtspUrl)
+            : camera.rtspHasPassword,
+      });
+      router.refresh();
+    } else toast.error(data.error ?? 'Não foi possível salvar.');
   }
 
   async function addCamera() {
@@ -143,7 +179,8 @@ export default function CamerasManager({
               {onlineCount} de {visible.length} no ar
             </h2>
             <p className="text-sm text-muted-foreground">
-              Inclua ângulos, escolha o que cada um é, e pause o que não entra no corte.
+              A Sofia acha o gravador na Wi-Fi. Sem HD, mande o vídeo pelo celular. Pasta só quando
+              o técnico já exporta.
             </p>
           </div>
         </div>
@@ -169,6 +206,8 @@ export default function CamerasManager({
           ) : null}
         </div>
       </div>
+
+      {canConfigure ? <SofiaAgent restaurantId={restaurantId} canConfigure={canConfigure} /> : null}
 
       <div className="grid grid-cols-1 gap-6 md:grid-cols-2">
         {visible.map((camera) => {
@@ -319,6 +358,129 @@ export default function CamerasManager({
                           </option>
                         ))}
                       </select>
+                    </div>
+                  ) : null}
+                </div>
+                <div className="space-y-2">
+                  <label className="text-xs font-medium text-muted-foreground">
+                    De onde vem o vídeo
+                  </label>
+                  <select
+                    className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm disabled:opacity-50"
+                    value={camera.ingestMode ?? 'folder'}
+                    disabled={!canConfigure}
+                    onChange={(event) =>
+                      patch(camera.id, {
+                        ingestMode: event.target.value as CameraItem['ingestMode'],
+                      })
+                    }
+                  >
+                    <option value="rtsp">Câmera na rede (RTSP) — sem HD</option>
+                    <option value="phone">Celular — baixar no app da câmera e enviar</option>
+                    <option value="folder">Pasta do gravador — quando o técnico tem o HD</option>
+                  </select>
+                  {camera.ingestMode === 'rtsp' ? (
+                    <div className="space-y-2">
+                      <input
+                        className="h-10 w-full rounded-md border border-input bg-background px-3 font-mono text-xs"
+                        placeholder="Cole o RTSP ou só o IP: 192.168.0.8"
+                        value={camera.rtspUrl || camera.rtspHost || ''}
+                        disabled={!canConfigure}
+                        autoComplete="off"
+                        onChange={(event) => {
+                          const value = event.target.value;
+                          patch(
+                            camera.id,
+                            value.includes('://')
+                              ? { rtspUrl: value }
+                              : { rtspHost: value, rtspUrl: value },
+                          );
+                        }}
+                      />
+                      <div className="grid gap-2 sm:grid-cols-2">
+                        <input
+                          className="h-10 rounded-md border border-input bg-background px-3 text-sm"
+                          placeholder="Usuário"
+                          value={camera.rtspUsername ?? 'admin'}
+                          disabled={!canConfigure}
+                          autoComplete="off"
+                          onChange={(event) =>
+                            patch(camera.id, { rtspUsername: event.target.value })
+                          }
+                        />
+                        <input
+                          className="h-10 rounded-md border border-input bg-background px-3 text-sm"
+                          placeholder={camera.rtspHasPassword ? 'Senha já salva' : 'Senha'}
+                          type="password"
+                          value={camera.rtspPassword ?? ''}
+                          disabled={!canConfigure}
+                          autoComplete="new-password"
+                          onChange={(event) =>
+                            patch(camera.id, { rtspPassword: event.target.value })
+                          }
+                        />
+                        <select
+                          className="h-10 rounded-md border border-input bg-background px-3 text-sm disabled:opacity-50"
+                          value={camera.rtspBrand ?? 'intelbras'}
+                          disabled={!canConfigure}
+                          onChange={(event) => patch(camera.id, { rtspBrand: event.target.value })}
+                        >
+                          <option value="intelbras">Intelbras</option>
+                          <option value="hikvision">Hikvision</option>
+                          <option value="dahua">Dahua</option>
+                          <option value="generic">Outra</option>
+                        </select>
+                        <input
+                          className="h-10 rounded-md border border-input bg-background px-3 text-sm"
+                          type="number"
+                          min={1}
+                          max={16}
+                          value={camera.rtspChannel ?? camera.position}
+                          disabled={!canConfigure}
+                          onChange={(event) =>
+                            patch(camera.id, {
+                              rtspChannel: Number(event.target.value) || camera.position,
+                            })
+                          }
+                        />
+                      </div>
+                      <select
+                        className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm disabled:opacity-50"
+                        value={camera.rtspTransport ?? 'tcp'}
+                        disabled={!canConfigure}
+                        onChange={(event) =>
+                          patch(camera.id, {
+                            rtspTransport: event.target.value as 'tcp' | 'udp',
+                          })
+                        }
+                      >
+                        <option value="tcp">Transporte TCP (recomendado)</option>
+                        <option value="udp">Transporte UDP</option>
+                      </select>
+                      <p className="text-xs text-muted-foreground">
+                        A senha não volta para o navegador. Intelbras MHDX usa canal 1–4 no mesmo
+                        IP.
+                      </p>
+                    </div>
+                  ) : null}
+                  {camera.ingestMode === 'phone' ? (
+                    <p className="text-xs text-muted-foreground">
+                      No app da câmera, baixe o clipe. No CenaPronta, abra Enviar e escolha o vídeo.
+                      Não precisa de HD nem de pasta.
+                    </p>
+                  ) : null}
+                  {camera.ingestMode === 'folder' ? (
+                    <div className="space-y-2">
+                      <input
+                        className="h-10 w-full rounded-md border border-input bg-background px-3 font-mono text-xs"
+                        placeholder="C:\CenaPronta\cameras"
+                        value={camera.folderPath ?? ''}
+                        disabled={!canConfigure}
+                        onChange={(event) => patch(camera.id, { folderPath: event.target.value })}
+                      />
+                      <p className="text-xs text-muted-foreground">
+                        O NVR grava em C1–C4 nesta pasta. O Uploader lê e deixa o original no lugar.
+                      </p>
                     </div>
                   ) : null}
                 </div>

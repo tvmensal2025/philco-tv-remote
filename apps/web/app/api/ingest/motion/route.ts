@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import { resolveMomentSearchWindow } from '@reelops/shared';
 import { adminClient } from '@/lib/supabase';
 import { getServerEnv } from '@/lib/env';
 import { enforceRateLimit } from '@/lib/rate-limit';
@@ -73,10 +74,13 @@ export async function POST(request: Request) {
     if (!settings.auto_capture_motion) return NextResponse.json({ ok: true, queued: false });
 
     const occurredAt = new Date(input.endedAt);
-    const before = Number(settings.window_before ?? 12);
-    const after = Number(settings.window_after ?? 8);
-    const windowStart = new Date(occurredAt.getTime() - before * 1000);
-    const windowEnd = new Date(occurredAt.getTime() + after * 1000);
+    const pool = resolveMomentSearchWindow({
+      durationSeconds: 60,
+      beforeSeconds: Number(settings.window_before ?? 12),
+      afterSeconds: Number(settings.window_after ?? 8),
+    });
+    const windowStart = new Date(occurredAt.getTime() - pool.beforeSeconds * 1000);
+    const windowEnd = new Date(occurredAt.getTime() + pool.afterSeconds * 1000);
 
     const { data: moment, error: momentError } = await admin
       .from('moments')
@@ -100,6 +104,7 @@ export async function POST(request: Request) {
         restaurant_id: camera.restaurant_id,
         moment_id: moment.id,
         title: 'Movimento detectado',
+        metadata: { program: 'casa', durationMode: 'ai', durationSeconds: null },
       })
       .select()
       .single();
@@ -116,7 +121,8 @@ export async function POST(request: Request) {
         occurredAt: occurredAt.toISOString(),
         windowStart: windowStart.toISOString(),
         windowEnd: windowEnd.toISOString(),
-        program: 'assinatura',
+        program: 'casa',
+        durationMode: 'ai',
       },
       {
         jobId: reel.id,

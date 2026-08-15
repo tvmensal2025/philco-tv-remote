@@ -67,3 +67,46 @@ export function assertCompleteMedia(probe) {
   if (!(probe.duration > 0)) throw new Error('INCOMPLETE_MEDIA:duration');
   return probe;
 }
+
+export function probeRtsp(url, timeoutMs = 8_000) {
+  return new Promise((resolve) => {
+    const child = spawn('ffprobe', [
+      '-v',
+      'error',
+      '-rtsp_transport',
+      'tcp',
+      '-stimeout',
+      '5000000',
+      '-show_entries',
+      'format=duration',
+      '-of',
+      'json',
+      url,
+    ]);
+    let stdout = '';
+    const timer = setTimeout(() => {
+      child.kill('SIGKILL');
+      resolve({ live: false });
+    }, timeoutMs);
+    child.stdout.on('data', (chunk) => {
+      stdout += chunk;
+    });
+    child.on('error', () => {
+      clearTimeout(timer);
+      resolve({ live: false });
+    });
+    child.on('close', (code) => {
+      clearTimeout(timer);
+      if (code !== 0) {
+        resolve({ live: false });
+        return;
+      }
+      try {
+        const duration = Number(JSON.parse(stdout)?.format?.duration);
+        resolve({ live: true, duration: Number.isFinite(duration) ? duration : 0 });
+      } catch {
+        resolve({ live: false });
+      }
+    });
+  });
+}

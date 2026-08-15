@@ -6,8 +6,10 @@ import { useState } from 'react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
+import HouseCutBoard from '@/components/house-cut-board';
 import { ProgramFilm, programOf, type FilmShot } from '@/components/program-film';
 import { editProgramLabels } from '@reelops/shared';
+import type { ReelCutMetadata } from '@/lib/house-cut';
 
 const statusLabel: Record<string, string> = {
   queued: 'Na fila',
@@ -138,12 +140,34 @@ export default function ReelDetails({
           )}
         </div>
         <div className="space-y-4">
-          <p className="text-sm text-muted-foreground">O mesmo instante, nos outros programas.</p>
+          <p className="text-sm text-muted-foreground">O filme Casa deste instante.</p>
+          {reel.caption ? (
+            <div className="rounded-2xl border bg-card p-4">
+              <p className="text-sm">{reel.caption}</p>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="mt-2"
+                onClick={() => {
+                  void navigator.clipboard.writeText(reel.caption ?? '');
+                  toast.success('Legenda copiada.');
+                }}
+              >
+                Copiar legenda
+              </Button>
+            </div>
+          ) : null}
           <ProgramFilm
             shots={siblings.length ? siblings : [reel]}
             occurredAt={occurred}
             label={reel.moments?.label}
             activeId={reel.id}
+          />
+          <HouseCutBoard
+            reelId={reel.id}
+            metadata={reel.metadata as ReelCutMetadata | null}
+            canEdit={['ready', 'approved', 'failed'].includes(status)}
+            onQueued={() => setStatus('queued')}
           />
         </div>
       </div>

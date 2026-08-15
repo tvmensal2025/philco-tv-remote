@@ -1,17 +1,30 @@
 # CenaPronta — ingestão de câmeras
 
-O CenaPronta **não grava** câmeras, **não abre RTSP**, **não usa ONVIF**, **não controla NVR/PTZ** e **não chama API da câmera**.
+O CenaPronta **não controla** NVR/PTZ. Ele entra quando existe um arquivo, um stream RTSP ou um envio pelo celular.
 
-O fluxo começa quando os arquivos aparecem em pastas:
+A **Sofia** só descobre aparelhos na LAN do restaurante (Uploader). Ela usa varredura de portas (554, 80, 8000, 34567) e um Probe ONVIF para **achar o gravador**. Não é controle PTZ.
 
 ```text
-CÂMERA / NVR
-  → arquivos de vídeo
-  → pastas monitoradas
-  → CenaPronta Uploader
-  → MinIO
-  → recordings (Supabase)
+Sofia (Uploader na LAN)
+  → acha o DVR / câmera IP
+  → confirma senha no dashboard
+  → RTSP canais 1–4
+  → ou pasta C:\CenaPronta\cameras\C1–C4
+  → ou /enviar no celular (iCSee / XMEye)
+  → MinIO → recordings
 ```
+
+RTSP **não roda na VPS**. A câmera está na LAN; o Uploader precisa estar na mesma rede.
+
+Câmera analógica **não tem IP**. A Sofia acha o MHDX/NVR, não quatro pontos Wi-Fi.
+
+## Sofia
+
+1. Dashboard → Câmeras → **Achar as câmeras**
+2. Uploader em `GET /api/ingest/sofia` recebe `scan`, varre a /24 e devolve discoveries
+3. Dono confirma IP + senha (a senha vai para `sofia_secrets`, nunca para `sofia_sessions`)
+4. Uploader prova RTSP por canal e grava em `cameras` + `camera_ingest_secrets`
+5. Se não achar gravador: pasta do NVR ou Enviar no celular
 
 ## Dois modos de pasta
 
@@ -21,6 +34,9 @@ CÂMERA / NVR
 | -------- | -------------------------------- | ------------------------------------------------------------------------------------------------- |
 | `watch`  | Pasta do NVR                     | O arquivo **original permanece**. CenaPronta só lê, calcula hash, envia e grava estado no SQLite. |
 | `outbox` | Pasta controlada pelo CenaPronta | Pode mover para `uploaded/` ou `failed/` (`moveOnSuccess` / `moveOnFailure`).                     |
+| RTSP     | Segmentos que o Uploader gravou  | Depois do upload o arquivo **é apagado** para o disco não encher.                                 |
+
+Pasta padrão de muita instalação: `C:\CenaPronta\cameras\C1` … `C4`.
 
 ## Persistência local
 

@@ -1,3 +1,4 @@
+import { Suspense } from 'react';
 import ReelsLibrary from '@/components/reels-library';
 import { dashboardContext } from '@/lib/dashboard-context';
 
@@ -13,15 +14,17 @@ export default async function ReelsPage() {
     .order('created_at', { ascending: false })
     .limit(100);
   return (
-    <ReelsLibrary
-      reels={(reels ?? []).map((reel) => ({
-        ...reel,
-        metadata:
-          reel.metadata && typeof reel.metadata === 'object'
-            ? (reel.metadata as { program?: string })
-            : null,
-        moments: Array.isArray(reel.moments) ? (reel.moments[0] ?? null) : reel.moments,
-      }))}
-    />
+    <Suspense>
+      <ReelsLibrary
+        reels={(reels ?? []).map((reel) => ({
+          ...reel,
+          metadata:
+            reel.metadata && typeof reel.metadata === 'object'
+              ? (reel.metadata as { program?: string })
+              : null,
+          moments: Array.isArray(reel.moments) ? (reel.moments[0] ?? null) : reel.moments,
+        }))}
+      />
+    </Suspense>
   );
 }

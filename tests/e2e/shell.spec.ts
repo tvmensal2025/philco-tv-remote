@@ -3,11 +3,7 @@ import { expectNoHorizontalOverflow, expectNoSeriousAccessibilityViolations } fr
 
 const navigation = [
   ['Início', '/'],
-  ['Sala', '/recordings'],
-  ['Reels', '/reels'],
-  ['Turno', '/moments'],
-  ['Câmeras', '/cameras'],
-  ['Estúdio', '/estudio'],
+  ['Filmes', '/reels'],
   ['Conta', '/settings'],
 ] as const;
 

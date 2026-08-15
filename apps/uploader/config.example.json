@@ -13,12 +13,20 @@
   "moveOnSuccess": true,
   "moveOnFailure": true,
   "timestampTimezone": "-03:00",
+  "rtspSegmentSeconds": 60,
   "cameras": {
     "cam-01": 1,
     "cam-02": 2,
     "cam-03": 3,
     "cam-04": 4
   },
+  "rtsp": [
+    {
+      "position": 1,
+      "url": "rtsp://admin:SENHA@192.168.0.20:554/cam/realmonitor?channel=1&subtype=0",
+      "transport": "tcp"
+    }
+  ],
   "sources": [
     {
       "camera": "cam-01",

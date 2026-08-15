@@ -11,6 +11,7 @@ import {
   type VideoEditDecisionV1,
 } from './video-decision.js';
 import { defaultEditingIntensityForProgram } from './edit-intensity.js';
+import { snapPlaybackSpeed } from './fx-catalog.js';
 
 export const DIRECTOR_SCHEMA_VERSION_V2 = '2.0';
 
@@ -112,6 +113,10 @@ export const sceneDecisionV2Schema = z
     reason: z.string().max(220).optional(),
     cameraScore: score.optional(),
     coherenceScore: score.optional(),
+    playbackSpeed: z
+      .union([z.literal(0.5), z.literal(0.75), z.literal(1), z.literal(1.5), z.literal(2)])
+      .optional(),
+    fxAssetId: z.string().trim().min(1).max(80).nullable().optional(),
   })
   .refine((scene) => scene.sourceEndMs > scene.sourceStartMs, {
     message: 'sourceEndMs must be after sourceStartMs',
@@ -382,6 +387,12 @@ export function repairVideoEditDecisionV2(input: unknown) {
       if (item.cutSafetyScore != null) item.cutSafetyScore = clampScore(item.cutSafetyScore);
       if (!Array.isArray(item.zoomEvents)) item.zoomEvents = [];
       if (item.primarySubjectRole === undefined) item.primarySubjectRole = null;
+      item.playbackSpeed = snapPlaybackSpeed(item.playbackSpeed);
+      if (typeof item.fxAssetId === 'string' && item.fxAssetId.trim()) {
+        item.fxAssetId = item.fxAssetId.trim().slice(0, 80);
+      } else {
+        item.fxAssetId = null;
+      }
       return item;
     });
   }

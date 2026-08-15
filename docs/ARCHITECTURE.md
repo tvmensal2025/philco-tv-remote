@@ -6,7 +6,8 @@ Restaurante                         VPS / EasyPanel                    Cloud
 NVR grava MP4 em pastas             Next.js apps/web                   Supabase (Postgres + Auth + Realtime)
 CenaPronta Uploader                 /api/ingest/presign|complete       Gemini / OpenAI (frames JPEG)
   watch: lê, não move               /api/moments                       Meta Graph (opcional)
-  outbox: pode arquivar             BullMQ + Redis                     WAME WhatsApp (opcional)
+  outbox: pode arquivar             /enviar (celular, sem HD)          WAME WhatsApp (opcional)
+  RTSP na LAN (FFmpeg segmentos)    BullMQ + Redis
   SQLite uploaded_files             Worker FFmpeg + YOLO HTTP
   TimestampResolver                 MinIO bucket cenapronta
                                     worker_nodes identity/capabilities

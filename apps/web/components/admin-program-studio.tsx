@@ -207,7 +207,7 @@ export default function AdminProgramStudio({ mode = 'live' }: { mode?: 'live' | 
 
   if (loadState === 'error') {
     return (
-      <div className="space-y-3">
+      <div className="nle flex h-full min-h-0 flex-col justify-center gap-3 p-8">
         <h1 className="font-heading text-2xl font-semibold">Estúdio dos 4 programas</h1>
         <p className="text-sm text-destructive">{error || 'Não foi possível abrir o estúdio.'}</p>
         <Button type="button" onClick={() => void reload()}>
@@ -219,10 +219,10 @@ export default function AdminProgramStudio({ mode = 'live' }: { mode?: 'live' | 
 
   if (loadState === 'loading' || !spec || !payload || !status) {
     return (
-      <div className="space-y-2">
+      <div className="nle flex h-full min-h-0 flex-col justify-center gap-2 p-8">
         <h1 className="font-heading text-2xl font-semibold">Estúdio dos 4 programas</h1>
-        <p className="text-sm text-muted-foreground">Abrindo o padrão validado…</p>
-        <p className="text-xs text-muted-foreground">
+        <p className="text-sm text-[#8a94a7]">Abrindo o padrão validado…</p>
+        <p className="text-xs text-[#8a94a7]">
           Se isto não sair em alguns segundos, use tentar de novo na mensagem de erro.
         </p>
       </div>
@@ -230,48 +230,9 @@ export default function AdminProgramStudio({ mode = 'live' }: { mode?: 'live' | 
   }
 
   return (
-    <div className="space-y-3">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <div className="flex min-w-0 flex-wrap items-center gap-2">
-          <h1 className="font-heading text-xl font-semibold">Estúdio dos 4 programas</h1>
-          <Badge variant={status.variant}>{status.label}</Badge>
-        </div>
-        <div className="flex flex-wrap gap-2">
-          <Button
-            variant="outline"
-            size="sm"
-            disabled={saving}
-            onClick={() => commit(cloneValidatedSpec(active))}
-          >
-            Restaurar validado
-          </Button>
-          {mode === 'live' ? (
-            <>
-              <Button
-                variant="secondary"
-                size="sm"
-                disabled={saving}
-                onClick={() => void save('draft')}
-              >
-                Guardar rascunho
-              </Button>
-              <Button
-                size="sm"
-                disabled={saving || status.kind === 'published'}
-                onClick={() => setPublishOpen(true)}
-              >
-                Publicar para restaurantes
-              </Button>
-            </>
-          ) : null}
-        </div>
-      </div>
-      <p className="text-xs text-muted-foreground">
-        Rascunho fica só aqui. Publicar vira o padrão da fábrica: os próximos Reels de todos os
-        restaurantes neste programa saem com este corte, estes tempos e estes efeitos.
-      </p>
-
+    <div className="nle flex h-full min-h-0 flex-col overflow-hidden">
       <Tabs
+        className="flex min-h-0 flex-1 flex-col gap-0"
         value={active}
         onValueChange={(value) => {
           setActive(value as EditProgram);
@@ -281,14 +242,64 @@ export default function AdminProgramStudio({ mode = 'live' }: { mode?: 'live' | 
           coalesceRef.current = false;
         }}
       >
-        <TabsList>
-          {programsList.map((program) => (
-            <TabsTrigger key={program} value={program}>
-              {editProgramLabels[program]}
-            </TabsTrigger>
-          ))}
-        </TabsList>
-        <TabsContent value={active} className="space-y-3 pt-3">
+        <header className="nle-topbar">
+          <div className="min-w-0">
+            <h1 className="truncate text-[13px] font-semibold leading-tight">
+              Estúdio dos 4 programas
+            </h1>
+            <p className="truncate text-[10px] text-[#8a94a7]">
+              Playbook da fábrica · o MP4 sai deste padrão
+            </p>
+          </div>
+          <Badge variant={status.variant}>{status.label}</Badge>
+          <TabsList variant="line" className="h-8 bg-transparent p-0">
+            {programsList.map((program) => (
+              <TabsTrigger
+                key={program}
+                value={program}
+                className="h-8 rounded-none px-3 text-[12px] data-[state=active]:text-[#d4a24c]"
+              >
+                {editProgramLabels[program]}
+              </TabsTrigger>
+            ))}
+          </TabsList>
+          <div className="ml-auto flex flex-wrap items-center gap-1.5">
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-7 border-[#262d3a] bg-transparent text-[12px]"
+              disabled={saving}
+              onClick={() => commit(cloneValidatedSpec(active))}
+            >
+              Restaurar validado
+            </Button>
+            {mode === 'live' ? (
+              <>
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  className="h-7 text-[12px]"
+                  disabled={saving}
+                  onClick={() => void save('draft')}
+                >
+                  Guardar rascunho
+                </Button>
+                <Button
+                  size="sm"
+                  className="h-7 bg-[#d4a24c] text-[12px] text-black hover:bg-[#e0b25c]"
+                  disabled={saving || status.kind === 'published'}
+                  onClick={() => setPublishOpen(true)}
+                >
+                  Publicar para restaurantes
+                </Button>
+              </>
+            ) : null}
+          </div>
+        </header>
+        <TabsContent
+          value={active}
+          className="mt-0 flex h-full min-h-0 flex-1 flex-col overflow-hidden p-0"
+        >
           <AdminProgramNle
             spec={spec}
             catalog={catalog}

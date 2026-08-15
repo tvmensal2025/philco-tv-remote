@@ -7,12 +7,15 @@ import {
   readdirSync,
   renameSync,
   statSync,
+  unlinkSync,
   watch,
 } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { openUploadDb } from './db.mjs';
 import { assertCompleteMedia, probeVideo } from './probe.mjs';
+import { createRtspRecorder } from './rtsp.mjs';
+import { createSofiaAgent } from './sofia.mjs';
 import { resolveTimestamp } from './timestamps.mjs';
 
 const root = path.dirname(fileURLToPath(import.meta.url));
@@ -26,13 +29,15 @@ if (!existsSync(configPath)) {
 const config = JSON.parse(readFileSync(configPath, 'utf8'));
 const defaultMode = config.sourceMode === 'outbox' ? 'outbox' : 'watch';
 const outbox = config.outbox;
-const camerasRoot = config.camerasDir || (outbox ? path.join(outbox, '..', 'cameras') : null);
+const dbPath = config.dbPath || path.join(path.dirname(configPath), 'uploaded-files.sqlite');
+let camerasRoot =
+  config.camerasDir ||
+  (outbox ? path.join(outbox, '..', 'cameras') : path.join(path.dirname(dbPath), 'cameras'));
 const uploadedDir =
   config.uploaded ||
   (outbox ? path.join(outbox, '..', 'uploaded') : path.join(root, '..', 'uploaded'));
 const failedDir =
   config.failed || (outbox ? path.join(outbox, '..', 'failed') : path.join(root, '..', 'failed'));
-const dbPath = config.dbPath || path.join(path.dirname(configPath), 'uploaded-files.sqlite');
 const stableSeconds = Number(
   process.env.FILE_STABLE_SECONDS ?? config.fileStableSeconds ?? config.stableMs / 1000 ?? 3,
 );
@@ -45,6 +50,10 @@ const cameras = config.cameras ?? { 'cam-01': 1, 'cam-02': 2, 'cam-03': 3, 'cam-
 const timezoneOffset = config.timestampTimezone ?? '-03:00';
 const moveOnSuccess = config.moveOnSuccess !== false;
 const moveOnFailure = config.moveOnFailure !== false;
+const rtspSegmentSeconds = Math.max(
+  15,
+  Math.min(300, Number(config.rtspSegmentSeconds ?? process.env.NVR_SEGMENT_SECONDS ?? 60)),
+);
 
 if (!apiUrl || !ingestKey || !restaurantId) {
   console.error('config.json precisa de apiUrl, ingestKey e restaurantId');
@@ -106,12 +115,27 @@ function configuredSources() {
 }
 
 for (const source of configuredSources()) mkdirSync(source.path, { recursive: true });
+mkdirSync(camerasRoot, { recursive: true });
 if (defaultMode === 'outbox' || outbox) {
   mkdirSync(uploadedDir, { recursive: true });
   mkdirSync(failedDir, { recursive: true });
 }
 
 const store = await openUploadDb(dbPath);
+const rtspRecorders = new Map();
+
+function isRtspOrigin(source) {
+  return source?.origin === 'rtsp' || rtspRecorders.has(Number(source?.position));
+}
+
+function dropLocalCopy(file, source) {
+  if (!isRtspOrigin(source)) return;
+  try {
+    unlinkSync(file);
+  } catch {
+    /* already gone */
+  }
+}
 
 function normalizePath(file) {
   return path.resolve(file).replaceAll('\\', '/').toLowerCase();
@@ -229,7 +253,10 @@ function maybeMove(file, destDir, source) {
 async function processFile(file, source) {
   const key = normalizePath(file);
   const existing = store.getByPath(key);
-  if (existing?.status === 'uploaded') return;
+  if (existing?.status === 'uploaded') {
+    dropLocalCopy(file, source);
+    return;
+  }
   if (existing?.status === 'failed' && existing.retry_at && Date.now() < Number(existing.retry_at))
     return;
   if (!(await waitStable(file))) return;
@@ -276,6 +303,7 @@ async function processFile(file, source) {
       retry_at: null,
       created_at: existing?.created_at,
     });
+    dropLocalCopy(file, source);
     return;
   }
 
@@ -311,7 +339,8 @@ async function processFile(file, source) {
       uploaded_at: new Date().toISOString(),
       retry_at: null,
     });
-    if (source.mode === 'outbox' && moveOnSuccess) maybeMove(file, uploadedDir, source);
+    if (isRtspOrigin(source)) dropLocalCopy(file, source);
+    else if (source.mode === 'outbox' && moveOnSuccess) maybeMove(file, uploadedDir, source);
     console.log(
       JSON.stringify({
         event: 'upload',
@@ -379,7 +408,92 @@ await scan();
 
 const watchers = [];
 let scanTimer;
+let rtspTimer;
+let sofiaTimer;
 let shuttingDown = false;
+
+function localRtspSources() {
+  if (!Array.isArray(config.rtsp)) return [];
+  return config.rtsp
+    .filter((source) => source?.url && source?.position)
+    .map((source) => ({
+      position: Number(source.position),
+      url: String(source.url),
+      transport: source.transport === 'udp' ? 'udp' : 'tcp',
+    }));
+}
+
+async function fetchRemoteCameras() {
+  try {
+    const response = await fetch(`${apiUrl}/api/ingest/sources?restaurantId=${restaurantId}`, {
+      headers: { authorization: `Bearer ${ingestKey}` },
+    });
+    if (!response.ok) return [];
+    const data = await response.json();
+    return data.cameras ?? [];
+  } catch {
+    return [];
+  }
+}
+
+function applyFolderRoot(folderPath) {
+  if (!folderPath) return;
+  camerasRoot = folderPath;
+  mkdirSync(camerasRoot, { recursive: true });
+  for (let position = 1; position <= 4; position += 1) {
+    const dir = path.join(camerasRoot, `C${position}`);
+    mkdirSync(dir, { recursive: true });
+    watchDirectory(dir);
+  }
+}
+
+function rtspOutputDir(position) {
+  return path.join(camerasRoot, `C${position}`);
+}
+
+async function syncRtsp() {
+  if (shuttingDown) return;
+  const remote = await fetchRemoteCameras();
+  const folder = remote.find((camera) => camera.ingestMode === 'folder' && camera.folderPath);
+  if (folder?.folderPath) applyFolderRoot(String(folder.folderPath));
+  const byPosition = new Map();
+  for (const source of localRtspSources()) byPosition.set(source.position, source);
+  for (const camera of remote) {
+    if (camera.ingestMode !== 'rtsp' || !camera.rtspUrl) continue;
+    byPosition.set(Number(camera.position), {
+      position: Number(camera.position),
+      url: String(camera.rtspUrl),
+      transport: camera.rtspTransport === 'udp' ? 'udp' : 'tcp',
+    });
+  }
+  const live = new Set(byPosition.keys());
+  for (const source of byPosition.values()) {
+    const outputDir = rtspOutputDir(source.position);
+    mkdirSync(outputDir, { recursive: true });
+    watchDirectory(outputDir);
+    const recorder = createRtspRecorder({
+      url: source.url,
+      position: source.position,
+      outputDir,
+      segmentSeconds: rtspSegmentSeconds,
+      timezoneOffset,
+      transport: source.transport,
+      log: (event) => console.log(JSON.stringify(event)),
+    });
+    const existing = rtspRecorders.get(source.position);
+    if (existing?.key === recorder.key) continue;
+    if (existing) await existing.stop();
+    rtspRecorders.set(source.position, recorder);
+    recorder.start();
+    console.log(JSON.stringify({ event: 'rtsp_start', position: source.position }));
+  }
+  for (const [position, recorder] of rtspRecorders) {
+    if (live.has(position)) continue;
+    await recorder.stop();
+    rtspRecorders.delete(position);
+    console.log(JSON.stringify({ event: 'rtsp_stop', position }));
+  }
+}
 
 async function shutdown(reason) {
   if (shuttingDown) return;
@@ -393,6 +507,10 @@ async function shutdown(reason) {
     }
   }
   if (scanTimer) clearInterval(scanTimer);
+  if (rtspTimer) clearInterval(rtspTimer);
+  if (sofiaTimer) clearInterval(sofiaTimer);
+  for (const recorder of rtspRecorders.values()) await recorder.stop();
+  rtspRecorders.clear();
   store.close();
   await sleep(80);
 }
@@ -403,18 +521,45 @@ if (process.argv.includes('--once')) {
 }
 
 const watched = new Set();
-for (const source of sources) {
-  if (watched.has(source.path) || !existsSync(source.path)) continue;
-  watched.add(source.path);
+function watchDirectory(dir) {
+  if (shuttingDown || watched.has(dir) || !existsSync(dir)) return;
+  watched.add(dir);
   watchers.push(
-    watch(source.path, { persistent: true }, () => {
+    watch(dir, { persistent: true }, () => {
       if (!shuttingDown) void scan();
     }),
   );
 }
+for (const source of sources) watchDirectory(source.path);
 scanTimer = setInterval(() => {
   if (!shuttingDown) void scan();
 }, 15_000);
+if (!process.argv.includes('--once')) {
+  const sofia = createSofiaAgent({
+    apiUrl,
+    ingestKey,
+    restaurantId,
+    getCamerasRoot: () => camerasRoot,
+    setCamerasRoot: (next) => {
+      camerasRoot = next;
+      mkdirSync(camerasRoot, { recursive: true });
+      for (let position = 1; position <= 4; position += 1) {
+        const dir = path.join(camerasRoot, `C${position}`);
+        mkdirSync(dir, { recursive: true });
+        watchDirectory(dir);
+      }
+    },
+    log: (event) => console.log(JSON.stringify(event)),
+  });
+  await syncRtsp();
+  await sofia.tick();
+  rtspTimer = setInterval(() => {
+    if (!shuttingDown) void syncRtsp();
+  }, 30_000);
+  sofiaTimer = setInterval(() => {
+    if (!shuttingDown) void sofia.tick();
+  }, 4_000);
+}
 process.on('SIGINT', () => {
   void shutdown('SIGINT').then(() => process.exit(0));
 });

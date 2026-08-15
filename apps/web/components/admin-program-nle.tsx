@@ -47,6 +47,7 @@ import {
   clampBeatDuration,
   type CameraRole,
   type CatalogEffect,
+  type FxAsset,
   type JoinName,
   type JoinOverlayKind,
   type JoinOverlayName,
@@ -57,7 +58,6 @@ import {
 } from '@reelops/shared';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import {
@@ -274,6 +274,60 @@ function JoinFxPlate(props: { name: JoinOverlayKind; opacity: number }) {
   );
 }
 
+function NleLookTutorial({ takeIndex, packCount }: { takeIndex: number; packCount: number }) {
+  const first = takeIndex === 0;
+  return (
+    <section className="space-y-3 border-t border-[#262d3a] px-3 py-3 text-[12px] leading-snug text-[#8a94a7]">
+      <h3 className="text-sm font-semibold text-[#e8eef6]">Tutorial do look</h3>
+      <p className="text-[#e8eef6]">
+        O monitor à esquerda é o Reel 9:16. A coluna do meio edita o take selecionado. A linha de
+        baixo é a timeline.
+      </p>
+      <ol className="list-decimal space-y-2.5 pl-4">
+        <li>
+          Clique num bloco na linha <span className="font-medium text-[#e8eef6]">V1</span> (Sala,
+          Balcão, Prato…). Esse é o take que o painel do meio está a editar.
+        </li>
+        <li>
+          <span className="font-medium text-[#e8eef6]">Transição à entrada</span> — como este take
+          entra por cima do anterior.
+          {first ? (
+            <> O take 1 não tem entrada: o filme começa nele.</>
+          ) : (
+            <> Corte seco, dissolve ou fade a preto. O tempo (0,4–1,2s) é o cruzamento.</>
+          )}
+        </li>
+        <li>
+          <span className="font-medium text-[#e8eef6]">Overlay no join</span> — flash, leak ou burn
+          gerados (uma cor no meio do corte). Aparece na linha{' '}
+          <span className="font-medium text-[#e8eef6]">FX</span>. Não é o pack WebM.
+        </li>
+        <li>
+          <span className="font-medium text-[#e8eef6]">Pack FX</span> — ficheiro WebM com
+          transparência (wipe, blur, flare). {packCount} no catálogo.{' '}
+          <span className="text-[#e8eef6]">Auto</span> = a OpenAI escolhe um id.{' '}
+          <span className="text-[#e8eef6]">Sem pack</span> = nenhum. Travar um id = você manda.
+        </li>
+        <li>
+          Não ponha pack em todos os cortes. Pulso: 1–2 transições. Casa: 1 join + 1 lens, sem
+          smash. O primeiro take pode levar lens no prato, não wipe.
+        </li>
+        <li>
+          Linhas da timeline: <span className="font-medium text-[#e8eef6]">V1</span> takes ·{' '}
+          <span className="font-medium text-[#e8eef6]">FX</span> overlay no join ·{' '}
+          <span className="font-medium text-[#e8eef6]">CC</span> legendas ·{' '}
+          <span className="font-medium text-[#e8eef6]">A1</span> música. O pack WebM só queima no
+          FFmpeg do worker — neste monitor vê-se o overlay de cor, não o ficheiro.
+        </li>
+        <li>
+          Quando o look estiver certo, publique o programa. Os Reels do restaurante usam este
+          playbook.
+        </li>
+      </ol>
+    </section>
+  );
+}
+
 function FieldSelect<T extends string>(props: {
   value: T;
   items: { value: T; label: string }[];
@@ -286,7 +340,7 @@ function FieldSelect<T extends string>(props: {
       onValueChange={(value) => props.onChange(value as T)}
       disabled={props.disabled}
     >
-      <SelectTrigger className="w-full">
+      <SelectTrigger className="h-8 w-full border-[#262d3a] bg-[#08090c] text-[12px]">
         <SelectValue />
       </SelectTrigger>
       <SelectContent>
@@ -331,18 +385,17 @@ function TransportButton(props: {
   children: React.ReactNode;
 }) {
   return (
-    <Button
+    <button
       type="button"
-      size="icon"
-      variant={props.active ? 'default' : 'outline'}
       disabled={props.disabled}
       title={props.label}
       aria-label={props.label}
+      aria-pressed={props.active || undefined}
       onClick={props.onClick}
-      className="size-9"
+      className={cn('nle-icon', props.active && 'text-[#d4a24c]')}
     >
       {props.children}
-    </Button>
+    </button>
   );
 }
 
@@ -355,8 +408,8 @@ function seekFromEvent(el: HTMLElement, clientX: number, duration: number) {
 function PlayheadMark(props: { pct: number }) {
   return (
     <div className="pointer-events-none absolute inset-y-0 z-20" style={{ left: `${props.pct}%` }}>
-      <div className="-ml-[5px] h-0 w-0 border-x-[5px] border-t-[7px] border-x-transparent border-t-red-500" />
-      <div className="ml-px h-full w-px bg-red-500" />
+      <div className="-ml-[5px] h-0 w-0 border-x-[5px] border-t-[7px] border-x-transparent border-t-[#ff3d5a]" />
+      <div className="ml-px h-full w-px bg-[#ff3d5a]" />
     </div>
   );
 }
@@ -396,13 +449,13 @@ function ReelsStage(props: {
   const height = FACTORY_LIMITS.frameHeight * scale;
 
   return (
-    <div ref={hostRef} className="flex h-[min(70vh,820px)] w-full items-center justify-center">
+    <div ref={hostRef} className="flex h-full min-h-0 w-full items-center justify-center p-3">
       <div
         role="img"
         aria-label="Monitor Reels 1080 por 1920"
         className={cn(
-          'relative overflow-hidden rounded-2xl border bg-black shadow-card',
-          props.dropOver && 'ring-2 ring-primary',
+          'relative overflow-hidden bg-black shadow-[0_0_0_1px_#262d3a,0_24px_80px_rgba(0,0,0,0.55)]',
+          props.dropOver && 'ring-2 ring-[#d4a24c]',
         )}
         style={{ width, height }}
         onDragOver={props.onDragOver}
@@ -441,6 +494,7 @@ export default function AdminProgramNle(props: {
   const [playing, setPlaying] = useState(false);
   const [loop, setLoop] = useState(true);
   const [sources, setSources] = useState<Record<number, TakeSource>>({});
+  const [fxAssets, setFxAssets] = useState<FxAsset[]>([]);
   const [dropOver, setDropOver] = useState(false);
   const [zoom, setZoom] = useState(1);
   const timelineRef = useRef<HTMLDivElement>(null);
@@ -467,6 +521,19 @@ export default function AdminProgramNle(props: {
   timeRef.current = time;
   specRef.current = spec;
   selectedRef.current = selected;
+
+  useEffect(() => {
+    let cancelled = false;
+    void fetch('/api/admin/fx-catalog', { cache: 'no-store' })
+      .then((response) => (response.ok ? response.json() : { assets: [] }))
+      .then((data) => {
+        if (!cancelled && Array.isArray(data.assets)) setFxAssets(data.assets);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const capacity = useMemo(() => programCapacity(spec), [spec]);
   const { clips, duration } = useMemo(
@@ -935,7 +1002,7 @@ export default function AdminProgramNle(props: {
   }
 
   return (
-    <div className="space-y-3">
+    <div className="flex h-full min-h-0 flex-col overflow-hidden">
       <input
         ref={fileInputRef}
         type="file"
@@ -948,21 +1015,17 @@ export default function AdminProgramNle(props: {
         }}
       />
 
-      <div className="rounded-xl border bg-card px-3 py-2">
-        <div className="mb-1.5 flex items-baseline justify-between gap-2">
-          <p className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
-            Efeitos da fábrica
-          </p>
-          <p className="text-[11px] text-muted-foreground">
+      <div className="nle-fxbar">
+        <div className="flex min-w-0 flex-wrap items-baseline gap-x-3">
+          <p className="nle-kicker">Efeitos da fábrica</p>
+          <p className="text-[11px] text-[#8a94a7]">
             Só o que o FFmpeg queima no 1080×1920. Nome e PNG vêm de cada restaurante.
           </p>
         </div>
-        <div className="flex flex-wrap items-start gap-x-4 gap-y-2">
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
           {groups.real.map(([group, effects]) => (
             <div key={group} className="flex min-w-0 flex-wrap items-center gap-1">
-              <span className="mr-1 text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
-                {groupLabels[group] ?? group}
-              </span>
+              <span className="nle-kicker mr-1">{groupLabels[group] ?? group}</span>
               {effects.map((effect) => {
                 const active = effectIsActive(effect, beat, spec);
                 return (
@@ -971,10 +1034,7 @@ export default function AdminProgramNle(props: {
                       <button
                         type="button"
                         onClick={() => applyEffect(effect)}
-                        className={cn(
-                          'rounded-md border px-2 py-0.5 text-xs hover:bg-accent',
-                          active && 'border-primary bg-primary/10 font-medium',
-                        )}
+                        className={cn('nle-chip', active && 'is-on')}
                       >
                         {effect.label}
                       </button>
@@ -990,8 +1050,8 @@ export default function AdminProgramNle(props: {
           ))}
         </div>
         {groups.architecture.length ? (
-          <details className="mt-2">
-            <summary className="cursor-pointer select-none text-[11px] font-medium text-muted-foreground">
+          <details>
+            <summary className="cursor-pointer select-none text-[11px] font-medium text-[#8a94a7]">
               Ainda não na fábrica ({groups.architecture.length})
             </summary>
             <div className="mt-2 flex flex-wrap gap-1.5">
@@ -999,10 +1059,10 @@ export default function AdminProgramNle(props: {
                 <div
                   key={effect.id}
                   title={effect.hint}
-                  className="cursor-not-allowed rounded-md border px-2 py-0.5 text-xs opacity-50"
+                  className="nle-chip cursor-not-allowed opacity-50"
                 >
                   {effect.label}
-                  <Badge variant="outline" className="ml-1">
+                  <Badge variant="outline" className="ml-1 border-[#262d3a] text-[9px]">
                     ainda não
                   </Badge>
                 </div>
@@ -1012,8 +1072,123 @@ export default function AdminProgramNle(props: {
         ) : null}
       </div>
 
-      <div className="grid items-start gap-4 xl:grid-cols-[minmax(0,1fr)_320px]">
-        <div className="flex min-w-0 flex-col items-center gap-2">
+      <div className="flex min-h-0 flex-1">
+        <aside className="flex w-[220px] shrink-0 flex-col border-r border-[#262d3a] bg-[#10131a]">
+          <p className="nle-kicker px-3 py-2">Takes</p>
+          <div className="nle-scroll min-h-0 flex-1 space-y-1 overflow-y-auto px-2 pb-2">
+            {spec.beats.map((item, index) => (
+              <button
+                key={`${item.name}-${index}`}
+                type="button"
+                onClick={() => onSelect(index)}
+                className={cn('nle-take', selected === index && 'is-active')}
+              >
+                <span className="block text-[11px] font-medium text-[#e8eef6]">
+                  Take {index + 1} · {item.name}
+                </span>
+                <span className="mt-0.5 block text-[10px] text-[#8a94a7]">
+                  {cameraRoleLabels[roleOf(item)]} · {item.durationSeconds.toFixed(1)}s
+                </span>
+              </button>
+            ))}
+          </div>
+          <div className="grid grid-cols-2 gap-1 border-t border-[#262d3a] p-2">
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-7 border-[#262d3a] bg-transparent text-[11px]"
+              disabled={spec.beats.length >= FACTORY_LIMITS.maxTakes}
+              onClick={() => {
+                onChange({ ...spec, beats: [...spec.beats, emptyBeat(spec.beats.length)] });
+                onSelect(spec.beats.length);
+              }}
+            >
+              Adicionar take
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-7 border-[#262d3a] bg-transparent text-[11px]"
+              disabled={spec.beats.length <= FACTORY_LIMITS.minTakes}
+              onClick={() => removeTakeAt(selected)}
+            >
+              Remover
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-7 border-[#262d3a] bg-transparent text-[11px]"
+              disabled={spec.beats.length >= FACTORY_LIMITS.maxTakes}
+              onClick={() => {
+                const next = duplicateBeatAt(spec, selected);
+                if (!next) return;
+                remapSources((current) => {
+                  const shifted: Record<number, TakeSource> = {};
+                  for (const [key, value] of Object.entries(current)) {
+                    const itemIndex = Number(key);
+                    shifted[itemIndex > selected ? itemIndex + 1 : itemIndex] = value;
+                  }
+                  const copy = current[selected];
+                  if (copy) shifted[selected + 1] = { ...copy, id: crypto.randomUUID() };
+                  return shifted;
+                });
+                onChange(next);
+                onSelect(selected + 1);
+              }}
+            >
+              <Copy className="mr-1 size-3" />
+              Duplicar
+            </Button>
+            <div className="flex gap-1">
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-7 flex-1 border-[#262d3a] bg-transparent text-[11px]"
+                disabled={selected === 0}
+                onClick={() => {
+                  remapSources((current) => {
+                    const next = { ...current };
+                    const left = next[selected - 1];
+                    const right = next[selected];
+                    if (right) next[selected - 1] = right;
+                    else delete next[selected - 1];
+                    if (left) next[selected] = left;
+                    else delete next[selected];
+                    return next;
+                  });
+                  onChange(moveBeat(spec, selected, -1));
+                  onSelect(selected - 1);
+                }}
+              >
+                Mover ←
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-7 flex-1 border-[#262d3a] bg-transparent text-[11px]"
+                disabled={selected >= spec.beats.length - 1}
+                onClick={() => {
+                  remapSources((current) => {
+                    const next = { ...current };
+                    const left = next[selected];
+                    const right = next[selected + 1];
+                    if (left) next[selected + 1] = left;
+                    else delete next[selected + 1];
+                    if (right) next[selected] = right;
+                    else delete next[selected];
+                    return next;
+                  });
+                  onChange(moveBeat(spec, selected, 1));
+                  onSelect(selected + 1);
+                }}
+              >
+                Mover →
+              </Button>
+            </div>
+          </div>
+        </aside>
+
+        <section className="nle-monitor-well min-w-0">
           <ReelsStage
             dropOver={dropOver}
             onDragOver={(event) => {
@@ -1194,216 +1369,320 @@ export default function AdminProgramNle(props: {
               </>
             ) : null}
           </ReelsStage>
-          <p className="text-center text-[11px] text-muted-foreground">
-            Canvas Reels 1080×1920, escala uniforme. Punch 11% · drift 7% · fade 0,7s / 0,85s.
-          </p>
-        </div>
+        </section>
 
-        <Card className="max-h-[min(70vh,820px)] overflow-y-auto">
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm">Take {selected + 1}</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-3">
-            <div className="space-y-2 rounded-lg border bg-muted/20 p-3">
-              <Label>Arquivo deste take</Label>
-              {sources[selected] ? (
-                <div className="space-y-2">
-                  <p className="truncate text-sm font-medium">{sources[selected]!.name}</p>
-                  <p className="text-[11px] text-muted-foreground">
-                    {sources[selected]!.fileDuration.toFixed(1)}s no disco
-                  </p>
-                  <label className="block space-y-1 text-sm">
-                    <Label>In-point (s)</Label>
-                    <Input
-                      type="number"
-                      min={0}
-                      max={Math.max(
-                        0,
-                        sources[selected]!.fileDuration - FACTORY_LIMITS.minBeatSeconds,
-                      )}
-                      step={0.1}
-                      value={Number(sources[selected]!.offsetSeconds.toFixed(2))}
-                      onChange={(event) => {
-                        const offsetSeconds = Math.max(0, Number(event.target.value));
-                        setSources((current) =>
-                          current[selected]
-                            ? { ...current, [selected]: { ...current[selected]!, offsetSeconds } }
-                            : current,
-                        );
-                      }}
-                    />
-                  </label>
-                  <div className="flex gap-2">
-                    <Button
-                      type="button"
-                      size="sm"
-                      variant="outline"
-                      onClick={() => fileInputRef.current?.click()}
-                    >
-                      Trocar arquivo
-                    </Button>
-                    <Button
-                      type="button"
-                      size="sm"
-                      variant="ghost"
-                      onClick={() => clearSource(selected)}
-                    >
-                      <X className="mr-1 size-3.5" />
-                      Tirar
-                    </Button>
+        <aside className="flex w-[320px] shrink-0 flex-col border-l border-[#262d3a] bg-[#10131a]">
+          <div className="nle-scroll min-h-0 flex-1 overflow-y-auto">
+            <div className="space-y-3 p-3">
+              <h2 className="text-sm font-semibold">Take {selected + 1}</h2>
+              <div className="space-y-2 rounded-md border border-[#262d3a] bg-[#161b24] p-3">
+                <Label>Arquivo deste take</Label>
+                {sources[selected] ? (
+                  <div className="space-y-2">
+                    <p className="truncate text-sm font-medium">{sources[selected]!.name}</p>
+                    <p className="text-[11px] text-muted-foreground">
+                      {sources[selected]!.fileDuration.toFixed(1)}s no disco
+                    </p>
+                    <label className="block space-y-1 text-sm">
+                      <Label>In-point (s)</Label>
+                      <Input
+                        type="number"
+                        min={0}
+                        max={Math.max(
+                          0,
+                          sources[selected]!.fileDuration - FACTORY_LIMITS.minBeatSeconds,
+                        )}
+                        step={0.1}
+                        value={Number(sources[selected]!.offsetSeconds.toFixed(2))}
+                        onChange={(event) => {
+                          const offsetSeconds = Math.max(0, Number(event.target.value));
+                          setSources((current) =>
+                            current[selected]
+                              ? { ...current, [selected]: { ...current[selected]!, offsetSeconds } }
+                              : current,
+                          );
+                        }}
+                      />
+                    </label>
+                    <div className="flex gap-2">
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        onClick={() => fileInputRef.current?.click()}
+                      >
+                        Trocar arquivo
+                      </Button>
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => clearSource(selected)}
+                      >
+                        <X className="mr-1 size-3.5" />
+                        Tirar
+                      </Button>
+                    </div>
                   </div>
-                </div>
-              ) : (
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="outline"
-                  className="w-full"
-                  onClick={() => fileInputRef.current?.click()}
-                >
-                  <FilePlus2 className="mr-1.5 size-3.5" />
-                  Anexar a este take
-                </Button>
-              )}
-            </div>
-            <label className="block space-y-1 text-sm">
-              <Label>Nome</Label>
-              <Input
-                value={beat.name}
-                onChange={(event) => patchBeat({ name: event.target.value }, 'coalesce')}
-              />
-            </label>
-            <label className="block space-y-1 text-sm">
-              <Label>Tempo do take / Pulso (s)</Label>
-              <Input
-                type="number"
-                min={FACTORY_LIMITS.minBeatSeconds}
-                max={FACTORY_LIMITS.maxBeatSeconds}
-                step={0.1}
-                value={beat.durationSeconds}
-                onChange={(event) =>
-                  patchBeat({ durationSeconds: Number(event.target.value) }, 'coalesce')
-                }
-              />
-            </label>
-            <div className="space-y-1 text-sm">
-              <Label>Transição à entrada</Label>
-              <FieldSelect
-                value={beat.join}
-                items={joins.map((join) => ({ value: join, label: joinLabels[join] }))}
-                onChange={(join) =>
-                  patchBeat({ join, joinDurationSeconds: JOIN_DEFAULT_SECONDS[join] })
-                }
-              />
-            </div>
-            <label className="block space-y-1 text-sm">
-              <Label>Tempo da transição (s)</Label>
-              <Input
-                type="number"
-                min={beat.join === 'cut' ? 0.02 : 0.4}
-                max={1.5}
-                step={0.02}
-                placeholder={`${JOIN_DEFAULT_SECONDS[beat.join]}`}
-                value={beat.joinDurationSeconds ?? ''}
-                onChange={(event) =>
-                  patchBeat(
-                    {
-                      joinDurationSeconds:
-                        event.target.value === '' ? undefined : Number(event.target.value),
-                    },
-                    'coalesce',
-                  )
-                }
-              />
-            </label>
-            <div className="space-y-1 text-sm">
-              <Label>Overlay no join</Label>
-              <FieldSelect
-                value={beat.joinOverlay ?? 'none'}
-                items={overlays.map((overlay) => ({
-                  value: overlay,
-                  label: joinOverlayLabels[overlay],
-                }))}
-                onChange={(joinOverlay) => patchBeat({ joinOverlay })}
-              />
-              <p className="text-[11px] text-muted-foreground">
-                {selected === 0
-                  ? 'Não há transição à entrada do primeiro take.'
-                  : 'Transparente, no meio do cut/dissolve. Pack WebM/MOV com alpha ainda não entra na fábrica.'}
-              </p>
-            </div>
-            <div className="space-y-1 text-sm">
-              <Label>Motion</Label>
-              <FieldSelect
-                value={beat.motion ?? 'none'}
-                items={motions.map((motion) => ({ value: motion, label: motionLabels[motion] }))}
-                onChange={(motion) => patchBeat({ motion })}
-              />
-            </div>
-            <div className="space-y-1">
-              <Label>Câmeras</Label>
-              <div className="flex flex-wrap gap-2">
-                {roles.map((role) => {
-                  const on = beat.roles.includes(role);
-                  return (
-                    <Button
-                      key={role}
-                      type="button"
-                      size="sm"
-                      variant={on ? 'default' : 'outline'}
-                      onClick={() => {
-                        const next = on
-                          ? beat.roles.filter((item) => item !== role)
-                          : [...beat.roles, role];
-                        patchBeat({ roles: next.length ? next : [role] });
-                      }}
-                    >
-                      {cameraRoleLabels[role]}
-                    </Button>
-                  );
-                })}
+                ) : (
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    className="w-full"
+                    onClick={() => fileInputRef.current?.click()}
+                  >
+                    <FilePlus2 className="mr-1.5 size-3.5" />
+                    Anexar a este take
+                  </Button>
+                )}
               </div>
+              <label className="block space-y-1 text-sm">
+                <Label>Nome</Label>
+                <Input
+                  value={beat.name}
+                  onChange={(event) => patchBeat({ name: event.target.value }, 'coalesce')}
+                />
+              </label>
+              <label className="block space-y-1 text-sm">
+                <Label>Duração deste plano (s)</Label>
+                <Input
+                  type="number"
+                  min={FACTORY_LIMITS.minBeatSeconds}
+                  max={FACTORY_LIMITS.maxBeatSeconds}
+                  step={0.1}
+                  value={beat.durationSeconds}
+                  onChange={(event) =>
+                    patchBeat({ durationSeconds: Number(event.target.value) }, 'coalesce')
+                  }
+                />
+                <p className="text-[11px] text-muted-foreground">
+                  Quanto este take fica no ecrã. Na timeline é a largura do bloco em V1.
+                </p>
+              </label>
+              <div className="space-y-1 text-sm">
+                <Label>Transição à entrada</Label>
+                <FieldSelect
+                  value={beat.join}
+                  items={joins.map((join) => ({ value: join, label: joinLabels[join] }))}
+                  onChange={(join) =>
+                    patchBeat({ join, joinDurationSeconds: JOIN_DEFAULT_SECONDS[join] })
+                  }
+                />
+                <p className="text-[11px] text-muted-foreground">
+                  {selected === 0
+                    ? 'Take 1: o filme começa aqui. Esta transição não corre.'
+                    : 'Como este take entra por cima do anterior (corte, dissolve ou fade a preto).'}
+                </p>
+              </div>
+              <label className="block space-y-1 text-sm">
+                <Label>Duração da transição (s)</Label>
+                <Input
+                  type="number"
+                  min={beat.join === 'cut' ? 0.02 : 0.4}
+                  max={1.5}
+                  step={0.02}
+                  placeholder={`${JOIN_DEFAULT_SECONDS[beat.join]}`}
+                  value={beat.joinDurationSeconds ?? ''}
+                  onChange={(event) =>
+                    patchBeat(
+                      {
+                        joinDurationSeconds:
+                          event.target.value === '' ? undefined : Number(event.target.value),
+                      },
+                      'coalesce',
+                    )
+                  }
+                />
+                <p className="text-[11px] text-muted-foreground">
+                  Tempo em que os dois takes se cruzam. Corte seco ~0,04s. Dissolve ~0,6s.
+                </p>
+              </label>
+              <div className="space-y-1 text-sm">
+                <Label>Flash no corte</Label>
+                <FieldSelect
+                  value={beat.joinOverlay ?? 'none'}
+                  items={overlays.map((overlay) => ({
+                    value: overlay,
+                    label: joinOverlayLabels[overlay],
+                  }))}
+                  onChange={(joinOverlay) => patchBeat({ joinOverlay })}
+                />
+                <p className="text-[11px] text-muted-foreground">
+                  Cor gerada no meio da transição (flash branco, leak, burn). Linha FX. Não é
+                  ficheiro.
+                </p>
+                <Label className="pt-2">Pack FX (ficheiro)</Label>
+                <FieldSelect
+                  value={beat.fxMode === 'none' ? 'none' : (beat.fxAssetId ?? 'auto')}
+                  items={[
+                    { value: 'auto', label: 'Auto (IA escolhe no catálogo)' },
+                    { value: 'none', label: 'Sem pack' },
+                    ...fxAssets.map((asset) => ({
+                      value: asset.id,
+                      label: `${asset.pack} · ${asset.id}`,
+                    })),
+                  ]}
+                  onChange={(value) => {
+                    if (value === 'auto') patchBeat({ fxMode: 'auto', fxAssetId: undefined });
+                    else if (value === 'none') patchBeat({ fxMode: 'none', fxAssetId: undefined });
+                    else patchBeat({ fxMode: undefined, fxAssetId: value });
+                  }}
+                />
+                <p className="text-[11px] text-muted-foreground">
+                  {selected === 0
+                    ? 'Take 1: wipe não corre. Pode ir um lens/filter em cima deste plano.'
+                    : 'WebM com transparência no mesmo instante do corte (wipe, blur, flare). Auto = OpenAI escolhe.'}
+                </p>
+              </div>
+              <div className="space-y-1 text-sm">
+                <Label>Movimento da câmara</Label>
+                <FieldSelect
+                  value={beat.motion ?? 'none'}
+                  items={motions.map((motion) => ({ value: motion, label: motionLabels[motion] }))}
+                  onChange={(motion) => patchBeat({ motion })}
+                />
+                <p className="text-[11px] text-muted-foreground">
+                  Dentro deste take, não no corte. Estático = parado. Zoom lento = sala. Zoom no
+                  prato = close.
+                </p>
+              </div>
+              <div className="space-y-1">
+                <Label>Câmeras</Label>
+                <div className="flex flex-wrap gap-2">
+                  {roles.map((role) => {
+                    const on = beat.roles.includes(role);
+                    return (
+                      <Button
+                        key={role}
+                        type="button"
+                        size="sm"
+                        variant={on ? 'default' : 'outline'}
+                        onClick={() => {
+                          const next = on
+                            ? beat.roles.filter((item) => item !== role)
+                            : [...beat.roles, role];
+                          patchBeat({ roles: next.length ? next : [role] });
+                        }}
+                      >
+                        {cameraRoleLabels[role]}
+                      </Button>
+                    );
+                  })}
+                </div>
+              </div>
+              <label className="flex items-center justify-between text-sm">
+                Punch-in{' '}
+                <Switch
+                  checked={Boolean(beat.punchIn)}
+                  onCheckedChange={(value) => patchBeat({ punchIn: value })}
+                />
+              </label>
+              <label className="flex items-center justify-between text-sm">
+                Fade in{' '}
+                <Switch
+                  checked={Boolean(beat.fadeIn)}
+                  onCheckedChange={(value) => patchBeat({ fadeIn: value })}
+                />
+              </label>
+              <label className="flex items-center justify-between text-sm">
+                Fade out{' '}
+                <Switch
+                  checked={Boolean(beat.fadeOut)}
+                  onCheckedChange={(value) => patchBeat({ fadeOut: value })}
+                />
+              </label>
+              <label className="flex items-center justify-between text-sm">
+                Cortar no pico{' '}
+                <Switch
+                  checked={beat.preferPeak !== false}
+                  onCheckedChange={(value) => patchBeat({ preferPeak: value })}
+                />
+              </label>
+              <label className="block space-y-1 text-sm">
+                <Label>Por que este take</Label>
+                <Input
+                  value={beat.reason}
+                  onChange={(event) => patchBeat({ reason: event.target.value }, 'coalesce')}
+                />
+              </label>
             </div>
-            <label className="flex items-center justify-between text-sm">
-              Punch-in{' '}
-              <Switch
-                checked={Boolean(beat.punchIn)}
-                onCheckedChange={(value) => patchBeat({ punchIn: value })}
-              />
-            </label>
-            <label className="flex items-center justify-between text-sm">
-              Fade in{' '}
-              <Switch
-                checked={Boolean(beat.fadeIn)}
-                onCheckedChange={(value) => patchBeat({ fadeIn: value })}
-              />
-            </label>
-            <label className="flex items-center justify-between text-sm">
-              Fade out{' '}
-              <Switch
-                checked={Boolean(beat.fadeOut)}
-                onCheckedChange={(value) => patchBeat({ fadeOut: value })}
-              />
-            </label>
-            <label className="flex items-center justify-between text-sm">
-              Cortar no pico{' '}
-              <Switch
-                checked={beat.preferPeak !== false}
-                onCheckedChange={(value) => patchBeat({ preferPeak: value })}
-              />
-            </label>
-            <label className="block space-y-1 text-sm">
-              <Label>Por que este take</Label>
-              <Input
-                value={beat.reason}
-                onChange={(event) => patchBeat({ reason: event.target.value }, 'coalesce')}
-              />
-            </label>
-          </CardContent>
-        </Card>
+            <section className="space-y-3 border-t border-[#262d3a] px-3 py-3">
+              <h3 className="text-sm font-semibold">Capacidade desta fábrica</h3>
+              <div className="flex flex-wrap items-baseline justify-between gap-2 rounded-md border border-[#262d3a] bg-[#161b24] px-3 py-2">
+                <p className="font-mono text-[12px]">
+                  {capacity.takeCount}/{FACTORY_LIMITS.maxTakes} takes ·{' '}
+                  {capacity.duration.toFixed(1)}s / {capacity.target}s
+                </p>
+                <p className="text-[11px] text-[#8a94a7]">
+                  overlap {capacity.overlapSaved.toFixed(2)}s · comida{' '}
+                  {Math.round(capacity.foodShare * 100)}% · ofício{' '}
+                  {Math.round(capacity.kitchenShare * 100)}%
+                </p>
+              </div>
+              <p className="text-[11px] text-[#8a94a7]">
+                1 FFmpeg de cada vez neste KVM. Ken Burns (drift/punch) só no perfil HIGH. Título,
+                logo, lower third, CTA e end card queimam em ASS/overlay; PNG do logo vem do
+                restaurante.
+              </p>
+              {capacity.warnings.length ? (
+                <ul className="list-disc space-y-1 pl-5 text-[12px] text-warning">
+                  {capacity.warnings.map((warning) => (
+                    <li key={warning}>{warning}</li>
+                  ))}
+                </ul>
+              ) : (
+                <p className="text-[12px] text-[#8a94a7]">
+                  Dentro do que a fábrica consegue publicar neste padrão.
+                </p>
+              )}
+              <div className="space-y-3">
+                <div className="space-y-1 text-sm">
+                  <Label>Join padrão do programa</Label>
+                  <FieldSelect
+                    value={spec.join}
+                    items={[
+                      { value: 'cut' as const, label: 'Corte seco' },
+                      { value: 'dissolve' as const, label: 'Dissolve' },
+                    ]}
+                    onChange={(join) => onChange({ ...spec, join })}
+                  />
+                </div>
+                <label className="block space-y-1 text-sm">
+                  <Label>Duração alvo (s)</Label>
+                  <Input
+                    type="number"
+                    min={8}
+                    max={90}
+                    step={0.5}
+                    value={spec.targetDuration}
+                    onChange={(event) =>
+                      onChange(
+                        { ...spec, targetDuration: Number(event.target.value) },
+                        { history: 'coalesce' },
+                      )
+                    }
+                  />
+                </label>
+                <div className="space-y-1 text-sm">
+                  <Label>Legenda</Label>
+                  <FieldSelect
+                    value={spec.captions.strategy}
+                    items={[
+                      { value: 'full' as const, label: 'Queimar caption da visão' },
+                      { value: 'none' as const, label: 'Sem legenda' },
+                    ]}
+                    onChange={(strategy) => onChange({ ...spec, captions: { strategy } })}
+                  />
+                </div>
+              </div>
+            </section>
+            <NleLookTutorial takeIndex={selected} packCount={fxAssets.length} />
+          </div>
+        </aside>
       </div>
 
-      <div className="flex flex-wrap items-center gap-1.5">
+      <div className="flex h-11 shrink-0 items-center gap-1 border-t border-[#262d3a] bg-[#10131a] px-3">
         <TransportButton
           label="Take anterior / início do take"
           onClick={() => {
@@ -1453,6 +1732,7 @@ export default function AdminProgramNle(props: {
         <Button
           type="button"
           size="sm"
+          className="h-7 bg-[#d4a24c] text-[12px] text-black hover:bg-[#e0b25c]"
           disabled={!canCut}
           onClick={cutAtPlayhead}
           title="Cortar no playhead (C)"
@@ -1464,16 +1744,31 @@ export default function AdminProgramNle(props: {
           type="button"
           size="sm"
           variant="secondary"
+          className="h-7 border-[#262d3a] bg-[#161b24] text-[12px]"
           onClick={() => fileInputRef.current?.click()}
         >
           <FilePlus2 className="mr-1.5 size-3.5" />
           Adicionar arquivo
         </Button>
-        <Button type="button" size="sm" variant="outline" disabled={!canUndo} onClick={onUndo}>
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          className="h-7 border-[#262d3a] bg-transparent text-[12px]"
+          disabled={!canUndo}
+          onClick={onUndo}
+        >
           <Undo2 className="mr-1.5 size-3.5" />
           Desfazer
         </Button>
-        <Button type="button" size="sm" variant="outline" disabled={!canRedo} onClick={onRedo}>
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          className="h-7 border-[#262d3a] bg-transparent text-[12px]"
+          disabled={!canRedo}
+          onClick={onRedo}
+        >
           <Redo2 className="mr-1.5 size-3.5" />
           Refazer
         </Button>
@@ -1485,7 +1780,7 @@ export default function AdminProgramNle(props: {
           >
             <Minus className="size-4" />
           </TransportButton>
-          <span className="w-8 text-center font-mono text-[10px] text-muted-foreground">
+          <span className="w-8 text-center font-mono text-[10px] text-[#8a94a7]">
             {zoom.toFixed(1)}x
           </span>
           <TransportButton
@@ -1495,20 +1790,28 @@ export default function AdminProgramNle(props: {
           >
             <Plus className="size-4" />
           </TransportButton>
-          <p className="ml-2 font-mono text-xs text-muted-foreground">
+          <p className="ml-2 font-mono text-xs text-[#8a94a7]">
             {formatTimecode(time)} / {formatTimecode(duration)}
           </p>
         </div>
       </div>
-      <div className="overflow-x-auto rounded-xl border border-zinc-800 bg-zinc-950 p-2">
+      <div className="nle-scroll h-[196px] shrink-0 overflow-x-auto border-t border-[#262d3a] bg-[#08090c] p-2">
         <div className="min-w-full" style={{ width: `${zoom * 100}%` }}>
           <div className="flex">
             <div className="flex w-9 shrink-0 flex-col font-mono text-[9px] font-bold uppercase tracking-wider text-zinc-500">
               <div className="h-4" />
-              <div className="flex h-24 items-center justify-center">V1</div>
-              <div className="flex h-8 items-center justify-center">FX</div>
-              <div className="flex h-7 items-center justify-center">CC</div>
-              <div className="flex h-7 items-center justify-center">A1</div>
+              <div className="flex h-24 items-center justify-center" title="Takes de câmera">
+                V1
+              </div>
+              <div className="flex h-8 items-center justify-center" title="Overlay no join">
+                FX
+              </div>
+              <div className="flex h-7 items-center justify-center" title="Legendas">
+                CC
+              </div>
+              <div className="flex h-7 items-center justify-center" title="Música">
+                A1
+              </div>
             </div>
             <div
               ref={timelineRef}
@@ -1541,7 +1844,7 @@ export default function AdminProgramNle(props: {
                     className={cn(
                       'absolute top-1 bottom-1 overflow-hidden rounded-sm border text-left text-[10px] font-medium text-white',
                       roleTone[roleOf(clip.beat)],
-                      selected === clip.index ? 'ring-2 ring-red-400' : 'opacity-90',
+                      selected === clip.index ? 'ring-2 ring-[#d4a24c]' : 'opacity-90',
                     )}
                     onPointerDown={(event) => beginClipDrag(event, clip.index)}
                   >
@@ -1628,167 +1931,6 @@ export default function AdminProgramNle(props: {
           </div>
         </div>
       </div>
-      <div className="flex flex-wrap gap-2">
-        <Button
-          variant="outline"
-          size="sm"
-          disabled={spec.beats.length >= FACTORY_LIMITS.maxTakes}
-          onClick={() => {
-            onChange({ ...spec, beats: [...spec.beats, emptyBeat(spec.beats.length)] });
-            onSelect(spec.beats.length);
-          }}
-        >
-          Adicionar take
-        </Button>
-        <Button
-          variant="outline"
-          size="sm"
-          disabled={spec.beats.length <= FACTORY_LIMITS.minTakes}
-          onClick={() => removeTakeAt(selected)}
-        >
-          Remover
-        </Button>
-        <Button
-          variant="outline"
-          size="sm"
-          disabled={spec.beats.length >= FACTORY_LIMITS.maxTakes}
-          onClick={() => {
-            const next = duplicateBeatAt(spec, selected);
-            if (!next) return;
-            remapSources((current) => {
-              const shifted: Record<number, TakeSource> = {};
-              for (const [key, value] of Object.entries(current)) {
-                const itemIndex = Number(key);
-                shifted[itemIndex > selected ? itemIndex + 1 : itemIndex] = value;
-              }
-              const copy = current[selected];
-              if (copy) shifted[selected + 1] = { ...copy, id: crypto.randomUUID() };
-              return shifted;
-            });
-            onChange(next);
-            onSelect(selected + 1);
-          }}
-        >
-          <Copy className="mr-1.5 size-3.5" />
-          Duplicar
-        </Button>
-        <Button
-          variant="outline"
-          size="sm"
-          disabled={selected === 0}
-          onClick={() => {
-            remapSources((current) => {
-              const next = { ...current };
-              const left = next[selected - 1];
-              const right = next[selected];
-              if (right) next[selected - 1] = right;
-              else delete next[selected - 1];
-              if (left) next[selected] = left;
-              else delete next[selected];
-              return next;
-            });
-            onChange(moveBeat(spec, selected, -1));
-            onSelect(selected - 1);
-          }}
-        >
-          Mover ←
-        </Button>
-        <Button
-          variant="outline"
-          size="sm"
-          disabled={selected >= spec.beats.length - 1}
-          onClick={() => {
-            remapSources((current) => {
-              const next = { ...current };
-              const left = next[selected];
-              const right = next[selected + 1];
-              if (left) next[selected + 1] = left;
-              else delete next[selected + 1];
-              if (right) next[selected] = right;
-              else delete next[selected];
-              return next;
-            });
-            onChange(moveBeat(spec, selected, 1));
-            onSelect(selected + 1);
-          }}
-        >
-          Mover →
-        </Button>
-      </div>
-
-      <Card>
-        <CardHeader className="pb-0">
-          <CardTitle className="text-sm">Capacidade desta fábrica</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          <div className="flex flex-wrap items-baseline justify-between gap-2 rounded-lg border bg-muted/20 px-3 py-2">
-            <p className="font-mono text-sm">
-              {capacity.takeCount}/{FACTORY_LIMITS.maxTakes} takes · {capacity.duration.toFixed(1)}s
-              / {capacity.target}s
-            </p>
-            <p className="text-xs text-muted-foreground">
-              overlap {capacity.overlapSaved.toFixed(2)}s · comida{' '}
-              {Math.round(capacity.foodShare * 100)}% · ofício{' '}
-              {Math.round(capacity.kitchenShare * 100)}%
-            </p>
-          </div>
-          <p className="text-xs text-muted-foreground">
-            1 FFmpeg de cada vez neste KVM. Ken Burns (drift/punch) só no perfil HIGH. Título, logo,
-            lower third, CTA e end card queimam em ASS/overlay; PNG do logo vem do restaurante.
-          </p>
-          {capacity.warnings.length ? (
-            <ul className="list-disc space-y-1 pl-5 text-sm text-warning">
-              {capacity.warnings.map((warning) => (
-                <li key={warning}>{warning}</li>
-              ))}
-            </ul>
-          ) : (
-            <p className="text-sm text-muted-foreground">
-              Dentro do que a fábrica consegue publicar neste padrão.
-            </p>
-          )}
-          <div className="grid gap-4 sm:grid-cols-3">
-            <div className="space-y-1 text-sm">
-              <Label>Join padrão do programa</Label>
-              <FieldSelect
-                value={spec.join}
-                items={[
-                  { value: 'cut' as const, label: 'Corte seco' },
-                  { value: 'dissolve' as const, label: 'Dissolve' },
-                ]}
-                onChange={(join) => onChange({ ...spec, join })}
-              />
-            </div>
-            <label className="space-y-1 text-sm">
-              <Label>Duração alvo (s)</Label>
-              <Input
-                type="number"
-                min={8}
-                max={90}
-                step={0.5}
-                value={spec.targetDuration}
-                onChange={(event) =>
-                  onChange(
-                    { ...spec, targetDuration: Number(event.target.value) },
-                    { history: 'coalesce' },
-                  )
-                }
-              />
-            </label>
-            <div className="space-y-1 text-sm">
-              <Label>Legenda</Label>
-              <FieldSelect
-                value={spec.captions.strategy}
-                items={[
-                  { value: 'full' as const, label: 'Queimar caption da visão' },
-                  { value: 'none' as const, label: 'Sem legenda' },
-                ]}
-                onChange={(strategy) => onChange({ ...spec, captions: { strategy } })}
-              />
-            </div>
-          </div>
-        </CardContent>
-      </Card>
     </div>
   );
 }

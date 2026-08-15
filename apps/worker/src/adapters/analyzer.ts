@@ -538,10 +538,12 @@ export function createAnalyzer(
       })
     : undefined;
   if (kind === 'openai') {
+    const geminiFallback =
+      config.VISION_PROVIDER_SECONDARY === 'gemini' ? geminiSecondary : undefined;
     return new OpenAIVisionProvider(resolved, {
       framePaths: options?.framePaths,
       prompt: options?.prompt,
-      fallback: geminiSecondary ?? heuristic,
+      fallback: geminiFallback ?? heuristic,
     });
   }
   return new GeminiVisionProvider(resolved, {

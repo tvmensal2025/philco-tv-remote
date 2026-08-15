@@ -16,6 +16,29 @@ export async function enforceRateLimit(
       connectTimeout: 2500,
       enableOfflineQueue: false,
     });
+    if (connection.status !== 'ready') {
+      await Promise.race([
+        new Promise<void>((resolve, reject) => {
+          if (connection?.status === 'ready') {
+            resolve();
+            return;
+          }
+          const onReady = () => {
+            connection?.off('error', onError);
+            resolve();
+          };
+          const onError = (error: Error) => {
+            connection?.off('ready', onReady);
+            reject(error);
+          };
+          connection?.once('ready', onReady);
+          connection?.once('error', onError);
+        }),
+        new Promise<never>((_, reject) => {
+          setTimeout(() => reject(new Error('REDIS_TIMEOUT')), 2500);
+        }),
+      ]);
+    }
     const redisKey = `reelops:limit:${key}`;
     const count = Number(
       await connection.eval(

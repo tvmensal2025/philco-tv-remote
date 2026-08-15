@@ -1,7 +1,15 @@
 import { mkdir } from 'node:fs/promises';
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
-import { cameraStoragePrefix, cameraUpdateSchema } from '@reelops/shared';
+import {
+  cameraStoragePrefix,
+  cameraUpdateSchema,
+  ingestModeOf,
+  isMaskedRtspSecret,
+  parseRtspUrl,
+  sourceTypeForMode,
+} from '@reelops/shared';
+import { saveCameraPassword } from '@/lib/camera-rtsp';
 import { adminClient, requireContext, requireRole } from '@/lib/supabase';
 import { enforceRateLimit } from '@/lib/rate-limit';
 import { cameraInboxPath } from '@/lib/camera-inbox';
@@ -108,7 +116,7 @@ export async function PUT(request: Request) {
           : input.role;
     const { data: camera } = await ctx.supabase
       .from('cameras')
-      .select('id,tenant_id,restaurant_id,position,source_config')
+      .select('id,tenant_id,restaurant_id,position,source_config,source_type')
       .eq('id', input.cameraId)
       .eq('tenant_id', ctx.tenantId)
       .single();
@@ -121,18 +129,60 @@ export async function PUT(request: Request) {
     if (input.storagePrefix && input.storagePrefix !== canonicalPrefix) {
       return NextResponse.json({ error: 'Caminho de armazenamento inválido.' }, { status: 409 });
     }
-    const sourceConfig = {
-      ...(camera.source_config && typeof camera.source_config === 'object'
+    const previousConfig =
+      camera.source_config && typeof camera.source_config === 'object'
         ? (camera.source_config as Record<string, unknown>)
-        : {}),
+        : {};
+    const ingestMode =
+      input.ingestMode ??
+      ingestModeOf(
+        input.sourceType ?? (typeof camera.source_type === 'string' ? camera.source_type : null),
+        previousConfig,
+      );
+    const parsedPaste = parseRtspUrl(input.rtspUrl);
+    const host = String(
+      input.rtspHost || parsedPaste?.host || previousConfig.rtspHost || '',
+    ).trim();
+    const username = String(
+      input.rtspUsername || parsedPaste?.username || previousConfig.rtspUsername || 'admin',
+    );
+    const passwordInput = input.rtspPassword || parsedPaste?.password || '';
+    if (ingestMode === 'rtsp' && !host) {
+      return NextResponse.json(
+        { error: 'Informe o IP do gravador ou da câmera. A Sofia também pode achar na Wi-Fi.' },
+        { status: 400 },
+      );
+    }
+    const sourceConfig: Record<string, unknown> = {
+      ...previousConfig,
       ...(role ? { role } : {}),
       ...(place ? { place: place === 'custom' && placeLabel ? slugPlace(placeLabel) : place } : {}),
       ...(placeLabel !== undefined ? { placeLabel: placeLabel || null } : {}),
+      ingestMode,
     };
+    delete sourceConfig.rtspUrl;
+    delete sourceConfig.rtspPassword;
+    if (ingestMode === 'rtsp') {
+      sourceConfig.rtspHost = host;
+      sourceConfig.rtspPort = String(
+        input.rtspPort || parsedPaste?.port || previousConfig.rtspPort || '554',
+      );
+      sourceConfig.rtspUsername = username;
+      sourceConfig.rtspBrand = input.rtspBrand || previousConfig.rtspBrand || 'intelbras';
+      sourceConfig.rtspChannel = input.rtspChannel || camera.position;
+      sourceConfig.rtspTransport = input.rtspTransport === 'udp' ? 'udp' : 'tcp';
+      sourceConfig.rtspHasPassword =
+        Boolean(previousConfig.rtspHasPassword) || Boolean(passwordInput);
+    }
+    if (input.folderPath !== undefined) sourceConfig.folderPath = input.folderPath;
     const patch: Record<string, unknown> = {
       name: input.name,
       enabled: input.enabled,
       storage_prefix: canonicalPrefix,
+      source_type: sourceTypeForMode(
+        ingestMode,
+        typeof camera.source_type === 'string' ? camera.source_type : null,
+      ),
       source_config: sourceConfig,
     };
     if (role) patch.role = role;
@@ -150,6 +200,11 @@ export async function PUT(request: Request) {
         .eq('tenant_id', ctx.tenantId));
     }
     if (error) throw error;
+    if (passwordInput && !isMaskedRtspSecret(passwordInput)) {
+      await saveCameraPassword(input.cameraId, ctx.tenantId, passwordInput);
+    } else if (parsedPaste?.password && !isMaskedRtspSecret(parsedPaste.password)) {
+      await saveCameraPassword(input.cameraId, ctx.tenantId, parsedPaste.password);
+    }
     return NextResponse.json({ ok: true });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Erro';

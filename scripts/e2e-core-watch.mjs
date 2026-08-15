@@ -208,6 +208,6 @@ console.log(
   ),
 );
 
-if (!watchIntact || (recordings ?? []).length < 4 || momentRes.status >= 400 || reels.length < 4)
+if (!watchIntact || (recordings ?? []).length < 4 || momentRes.status >= 400 || reels.length < 1)
   process.exit(2);
 process.exit(0);

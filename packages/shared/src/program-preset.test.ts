@@ -3,6 +3,7 @@ import {
   cloneValidatedSpec,
   joinedPlaybookSeconds,
   playbookFor,
+  playbookForDuration,
   programPresetSpecSchema,
   renderEffectCatalog,
   specToPlaybook,
@@ -24,16 +25,20 @@ describe('validated four-program standard', () => {
     expect(pulso.join).toBe('cut');
     expect(pulso.beats.every((beat) => beat.join === 'cut')).toBe(true);
     expect(new Set(pulso.beats.flatMap((beat) => beat.roles)).size).toBe(4);
-    expect(pulso.targetDuration).toBe(59);
+    expect(pulso.targetDuration).toBeGreaterThanOrEqual(8);
+    expect(pulso.targetDuration).toBeLessThan(25);
     expect(pulso.beats.at(-1)?.fadeOut).toBe(true);
   });
 
-  it('locks every program to the 59s music bed', () => {
+  it('fits a program to 15s or 60s without locking the recipe to 59s', () => {
     for (const program of ['casa', 'oficio', 'assinatura', 'pulso'] as const) {
-      const book = specToPlaybook(validatedProgramPresets[program]);
-      expect(book.targetDuration).toBe(59);
-      expect(joinedPlaybookSeconds(book.beats)).toBeGreaterThan(57);
-      expect(joinedPlaybookSeconds(book.beats)).toBeLessThan(61);
+      const short = playbookForDuration(program, 15);
+      const long = playbookForDuration(program, 60);
+      expect(joinedPlaybookSeconds(short.beats)).toBeGreaterThan(12);
+      expect(joinedPlaybookSeconds(short.beats)).toBeLessThan(18);
+      expect(joinedPlaybookSeconds(long.beats)).toBeGreaterThan(56);
+      expect(joinedPlaybookSeconds(long.beats)).toBeLessThan(64);
+      expect(playbookFor(program).targetDuration).toBeLessThan(40);
     }
   });
 
@@ -70,7 +75,7 @@ describe('validated four-program standard', () => {
       })),
     });
     expect(playbookFor('pulso', override).beats[0]?.durationSeconds).toBe(1.2);
-    expect(playbookFor('pulso').beats[0]?.durationSeconds).toBeGreaterThan(5);
+    expect(playbookFor('pulso').beats[0]?.durationSeconds).toBeCloseTo(1.9);
   });
 
   it('only offers real FFmpeg effects as selectable', () => {
@@ -83,7 +88,7 @@ describe('validated four-program standard', () => {
     expect(real.some((item) => item.id === 'cta')).toBe(true);
     expect(real.some((item) => item.id === 'end-card')).toBe(true);
     expect(fake.some((item) => item.id === 'masked_reveal')).toBe(true);
-    expect(fake.some((item) => item.id === 'overlay-alpha-pack')).toBe(true);
+    expect(real.some((item) => item.id === 'overlay-alpha-pack')).toBe(true);
     expect(real.some((item) => item.id === 'masked_reveal')).toBe(false);
   });
 

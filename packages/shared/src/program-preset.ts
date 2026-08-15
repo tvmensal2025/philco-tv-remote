@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { takeCountForDuration } from './reel-duration.js';
 
 const cameraRoles = ['master', 'side', 'food', 'ambience'] as const;
 const editPrograms = ['casa', 'oficio', 'assinatura', 'pulso'] as const;
@@ -95,6 +96,8 @@ export const playbookBeatSchema = z.object({
   join: z.enum(joinNames),
   joinDurationSeconds: z.number().min(0.02).max(1.5).optional(),
   joinOverlay: z.enum(joinOverlayNames).optional(),
+  fxAssetId: z.string().trim().min(1).max(80).optional(),
+  fxMode: z.enum(['none', 'auto']).optional(),
   fadeIn: z.boolean().optional(),
   fadeOut: z.boolean().optional(),
   punchIn: z.boolean().optional(),
@@ -148,8 +151,12 @@ export const JOIN_DEFAULT_SECONDS: Record<JoinName, number> = {
   fadeblack: 0.5,
 };
 
-/** Output length of every program — matches the owned Sofia Veo beds. */
+/** Owned Sofia Veo beds are ~59s; Reels now scale to 15/30/45/60 instead of locking here. */
 export const MUSIC_BED_SECONDS = 59;
+
+export function fitBeatsToTarget(beats: PlaybookBeat[], target: number): PlaybookBeat[] {
+  return fitBeatsToMusicBed(beats, target);
+}
 
 export const joinOverlayLabels: Record<JoinOverlayName, string> = {
   none: 'Sem FX',
@@ -206,9 +213,9 @@ export function resolvedJoinOverlay(beat: {
 }
 
 export const motionLabels: Record<MotionName, string> = {
-  none: 'Estático',
-  drift: 'Drift',
-  punch: 'Punch',
+  none: 'Estático — o plano não mexe',
+  drift: 'Zoom lento — sala / ambiente',
+  punch: 'Zoom no prato — close',
 };
 
 export const cameraRoleLabels: Record<CameraRole, string> = {
@@ -236,6 +243,8 @@ export type CatalogEffect = {
       | 'punchIn'
       | 'fadeIn'
       | 'fadeOut'
+      | 'fxAssetId'
+      | 'fxMode'
       | 'preferPeak'
     >
   >;
@@ -408,8 +417,8 @@ export const renderEffectCatalog: CatalogEffect[] = [
     id: 'overlay-alpha-pack',
     group: 'overlay',
     label: 'Pack WebM alpha',
-    status: 'architecture',
-    hint: 'Slot para MOV/WebM com transparência no meio do join — ainda sem ficheiro na fábrica',
+    status: 'real',
+    hint: 'MOV/WebM do catálogo (assets/fx) no join — alpha, screen ou add',
   },
   {
     id: 'title',
@@ -527,16 +536,14 @@ function spec(
   minRoles: number,
   beats: PlaybookBeat[],
 ): ProgramPresetSpec {
-  const takeCount = program === 'pulso' ? Math.max(8, beats.length) : Math.max(7, beats.length);
-  const fitted = fitBeatsToMusicBed(fillTakes(beats, takeCount), MUSIC_BED_SECONDS);
   return programPresetSpecSchema.parse({
     schemaVersion: '1.0',
     program,
     join,
-    targetDuration: MUSIC_BED_SECONDS,
+    targetDuration: Math.max(8, Math.min(90, Math.round(joinedPlaybookSeconds(beats)) || 30)),
     maxShare,
     minRoles,
-    beats: fitted,
+    beats,
     captions: { strategy: 'full' },
     branding: defaultBrandingFor(program),
   });
@@ -740,6 +747,31 @@ export function specToPlaybook(input: ProgramPresetSpec): Playbook {
 export function playbookFor(program: EditProgram, override?: Playbook | null): Playbook {
   if (override && override.program === program && override.beats.length >= 3) return override;
   return specToPlaybook(validatedProgramPresets[program]);
+}
+
+export function playbookForDuration(
+  program: EditProgram,
+  durationSeconds: number,
+  override?: Playbook | null,
+): Playbook {
+  const target = Math.max(8, Math.min(90, durationSeconds));
+  const base = playbookFor(program, override);
+  const recipe =
+    override && override.program === program && override.beats.length >= 3
+      ? override.beats
+      : validatedProgramPresets[program].beats;
+  const filled = fillTakes(recipe, takeCountForDuration(program, target));
+  return specToPlaybook({
+    schemaVersion: '1.0',
+    program: base.program,
+    join: base.join,
+    targetDuration: target,
+    maxShare: base.maxShare,
+    minRoles: base.minRoles,
+    beats: fitBeatsToTarget(filled, target),
+    captions: base.captions,
+    branding: base.branding,
+  });
 }
 
 export function cloneValidatedSpec(program: EditProgram): ProgramPresetSpec {

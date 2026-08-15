@@ -68,12 +68,14 @@ export function mixBackgroundMusicGraph(input: {
   duration: number;
   ambientInputIndex?: number;
   ambientStart?: number;
+  musicStart?: number;
   voiceInputIndex?: number;
   ducking?: DuckingConfig;
 }) {
   const config = input.ducking ?? backgroundBed;
   const fadeOutStart = Math.max(0, input.duration - 1.2);
-  const music = `[${input.musicInputIndex}:a]atrim=start=0:duration=${input.duration},asetpts=PTS-STARTPTS,afade=t=in:st=0:d=0.4,afade=t=out:st=${fadeOutStart}:d=1.2,${deliveryAudioFilter()},volume=${config.musicGain},apad=whole_dur=${input.duration}[music]`;
+  const musicStart = Math.max(0, input.musicStart ?? 0);
+  const music = `[${input.musicInputIndex}:a]atrim=start=${musicStart}:duration=${input.duration},asetpts=PTS-STARTPTS,afade=t=in:st=0:d=0.4,afade=t=out:st=${fadeOutStart}:d=1.2,${deliveryAudioFilter()},volume=${config.musicGain},apad=whole_dur=${input.duration}[music]`;
   const voice =
     input.voiceInputIndex == null
       ? null

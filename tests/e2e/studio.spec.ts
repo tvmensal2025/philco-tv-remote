@@ -7,11 +7,11 @@ test.describe('estúdio NLE sem backend', () => {
     await page.goto('/e2e/studio');
 
     await expect(page.getByRole('heading', { name: 'Estúdio dos 4 programas' })).toBeVisible();
-    await expect(page.getByText('Validado')).toBeVisible();
+    await expect(page.getByText('Validado', { exact: true })).toBeVisible();
     await expect(page.getByRole('img', { name: 'Monitor Reels 1080 por 1920' })).toBeVisible();
     await expect(page.getByRole('button', { name: 'Cortar', exact: true })).toBeVisible();
     await expect(page.getByRole('button', { name: 'Aproximar timeline' })).toBeVisible();
-    await expect(page.getByText('V1')).toBeVisible();
+    await expect(page.getByTitle('Takes de câmera')).toBeVisible();
     await expect(page.getByText('Efeitos da fábrica')).toBeVisible();
     await expect(page.getByRole('button', { name: 'Dissolve' }).first()).toBeVisible();
     await expect(page.getByRole('button', { name: 'Título' })).toBeVisible();
@@ -23,6 +23,7 @@ test.describe('estúdio NLE sem backend', () => {
 
     await page.getByRole('tab', { name: 'Casa' }).click();
     await expect(page.getByRole('heading', { name: 'Take 1' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Tutorial do look' })).toBeVisible();
     await expect(page.getByText('Capacidade desta fábrica')).toBeVisible();
     await expectNoHorizontalOverflow(page);
   });

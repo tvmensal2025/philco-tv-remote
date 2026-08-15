@@ -27,7 +27,7 @@ export function coverageReport(playbook: Playbook, scenes: CoverageScene[]) {
   let ok = scenes.length >= 3 && roles.size >= Math.min(playbook.minRoles, roles.size);
   let reason = 'ok';
   if (playbook.program === 'casa') {
-    ok = scenes.length >= 3 && foodShare <= 0.72;
+    ok = scenes.length >= 1;
     if (!ok) reason = `COVERAGE:casa:takes=${scenes.length}:food=${foodShare.toFixed(2)}`;
   } else if (playbook.program === 'oficio') {
     ok = kitchenShare >= 0.35 && roles.size >= 2 && scenes.length >= 4;

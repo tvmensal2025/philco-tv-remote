@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
+import Link from 'next/link';
 import { toast } from 'sonner';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -12,7 +13,16 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
-import { Clapperboard, Copy, FolderOpen, MoreHorizontal, Plus, Trash2, Upload } from 'lucide-react';
+import {
+  Clapperboard,
+  Copy,
+  FolderOpen,
+  MoreHorizontal,
+  Plus,
+  Smartphone,
+  Trash2,
+  Upload,
+} from 'lucide-react';
 import {
   CAMERA_PLACES,
   CUSTOM_PLACE,
@@ -22,6 +32,7 @@ import {
   selectPlaceValue,
 } from '@/lib/camera-roles';
 import { cn } from '@/lib/utils';
+import { ReelDurationPicker, type ReelDurationChoice } from '@/components/reel-duration-picker';
 
 type Recording = {
   id: string;
@@ -151,13 +162,14 @@ export default function RecordingsBrowser({
   const [restaurantId, setRestaurantId] = useState(restaurants[0]?.id ?? '');
   const [playingId, setPlayingId] = useState<number | null>(null);
   const [busy, setBusy] = useState(false);
+  const [duration, setDuration] = useState<ReelDurationChoice>('ai');
   const [adding, setAdding] = useState(false);
   const [slots, setSlots] = useState<Record<number, SlotState>>({});
   const [hoverDrop, setHoverDrop] = useState<number | null>(null);
   const [takeId, setTakeId] = useState<string | null>(null);
   const requestIdRef = useRef<string | null>(null);
   const [localCameras, setLocalCameras] = useState(cameras);
-  const [capturedAt] = useState(() => new Date().toISOString());
+  const [isPhone, setIsPhone] = useState(false);
   const restaurantCameras = localCameras.filter((camera) => camera.restaurant_id === restaurantId);
   const restaurantRecordings = useMemo(
     () =>
@@ -180,6 +192,14 @@ export default function RecordingsBrowser({
     setLocalCameras(cameras);
   }, [cameras]);
 
+  useEffect(() => {
+    const media = window.matchMedia('(pointer: coarse)');
+    const sync = () => setIsPhone(media.matches);
+    sync();
+    media.addEventListener('change', sync);
+    return () => media.removeEventListener('change', sync);
+  }, []);
+
   async function receiveFile(position: number, file?: File) {
     if (!file || busy) return;
     const previous = slots[position]?.preview;
@@ -195,7 +215,7 @@ export default function RecordingsBrowser({
     body.set('file', file);
     body.set('restaurantId', restaurantId);
     body.set('cameraPosition', String(position));
-    body.set('capturedAt', capturedAt);
+    body.set('capturedAt', new Date(file.lastModified || Date.now()).toISOString());
     body.set('durationSeconds', String(Math.round(duration)));
     const response = await fetch('/api/recordings/upload', { method: 'POST', body });
     const data = await response.json();
@@ -225,13 +245,13 @@ export default function RecordingsBrowser({
       const response = await fetch('/api/moments', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ restaurantId, clientRequestId, ...(window ?? {}) }),
+        body: JSON.stringify({ restaurantId, clientRequestId, duration, ...(window ?? {}) }),
       });
       const data = await response.json();
-      if (!response.ok) throw new Error(data.error ?? 'Não foi possível gerar os Reels.');
+      if (!response.ok) throw new Error(data.error ?? 'Não foi possível gerar o Reel.');
       requestIdRef.current = null;
       const count = Array.isArray(data.reels) ? data.reels.length : 1;
-      toast.success(`${count} programas na fila`);
+      toast.success(count === 1 ? 'Reel na fila' : `${count} Reels na fila`);
       const reelId = data.reel?.id ?? data.reels?.[0]?.id;
       router.push(reelId ? `/reels/${reelId}` : '/reels');
       router.refresh();
@@ -369,8 +389,7 @@ export default function RecordingsBrowser({
               : 'Sala de câmeras'}
           </p>
           <p className="text-sm text-muted-foreground">
-            Isto é a sala. O gravador manda o vídeo sozinho para cá. Escolha o instante e gere —
-            saem Casa, Ofício, Assinatura e Pulso.
+            RTSP, celular ou pasta do gravador. Escolha o instante e gere o Reel.
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
@@ -390,6 +409,7 @@ export default function RecordingsBrowser({
               ))}
             </select>
           ) : null}
+          <ReelDurationPicker value={duration} onChange={setDuration} />
           <Button
             type="button"
             size="lg"
@@ -397,10 +417,23 @@ export default function RecordingsBrowser({
             disabled={busy || (!ready && !selectedTake)}
           >
             <Clapperboard className="mr-2 h-4 w-4" />
-            {busy ? 'Gerando…' : 'Gerar Reels'}
+            {busy ? 'Gerando…' : 'Gerar Reel'}
           </Button>
         </div>
       </div>
+
+      <Link
+        href="/enviar"
+        className="flex items-center gap-3 rounded-xl border bg-primary/5 px-4 py-3 text-sm transition hover:bg-primary/10"
+      >
+        <Smartphone className="h-5 w-5 shrink-0 text-primary" />
+        <span>
+          <span className="font-medium">Sem acesso ao HD?</span>{' '}
+          <span className="text-muted-foreground">
+            Baixe o clipe no app da câmera e envie pelo celular.
+          </span>
+        </span>
+      </Link>
 
       <div className="rounded-2xl border border-zinc-800 bg-zinc-950 p-2 shadow-sm">
         <div
@@ -530,21 +563,25 @@ export default function RecordingsBrowser({
                           onClick={() => fileInputs.current[camera.position]?.click()}
                         >
                           <Upload className="h-4 w-4" />
-                          Escolher arquivo
+                          {isPhone ? 'Enviar do celular' : 'Escolher arquivo'}
                         </DropdownMenuItem>
-                        <DropdownMenuItem
-                          onClick={() => {
-                            void navigator.clipboard.writeText(inboxPath(camera.position));
-                            toast.success('Pasta copiada');
-                          }}
-                        >
-                          <Copy className="h-4 w-4" />
-                          Copiar pasta
-                        </DropdownMenuItem>
-                        <DropdownMenuItem onClick={() => void openFolder(camera.position)}>
-                          <FolderOpen className="h-4 w-4" />
-                          Abrir no Explorer
-                        </DropdownMenuItem>
+                        {isPhone ? null : (
+                          <>
+                            <DropdownMenuItem
+                              onClick={() => {
+                                void navigator.clipboard.writeText(inboxPath(camera.position));
+                                toast.success('Pasta copiada');
+                              }}
+                            >
+                              <Copy className="h-4 w-4" />
+                              Copiar pasta
+                            </DropdownMenuItem>
+                            <DropdownMenuItem onClick={() => void openFolder(camera.position)}>
+                              <FolderOpen className="h-4 w-4" />
+                              Abrir no Explorer
+                            </DropdownMenuItem>
+                          </>
+                        )}
                         <DropdownMenuSeparator />
                         <DropdownMenuItem
                           variant="destructive"
@@ -583,8 +620,14 @@ export default function RecordingsBrowser({
         <div className="rounded-xl border border-dashed bg-muted/30 px-6 py-14 text-center">
           <h3 className="text-lg font-semibold">Nenhum take ainda</h3>
           <p className="mx-auto mt-2 max-w-md text-sm text-muted-foreground">
-            Monte o quadro, escolha o que cada câmera é, e solte o ISO. O sistema agrupa o mesmo
-            instante e corta dali.
+            Monte o quadro. Sem HD,{' '}
+            <Link
+              href="/enviar"
+              className="font-medium text-foreground underline-offset-4 hover:underline"
+            >
+              envie o vídeo do celular
+            </Link>
+            .
           </p>
         </div>
       ) : (

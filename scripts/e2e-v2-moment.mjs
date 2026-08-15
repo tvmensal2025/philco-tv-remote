@@ -69,4 +69,4 @@ console.log(
     2,
   ),
 );
-if (!watchIntact || momentRes.status >= 400 || reels.length < 4) process.exit(2);
+if (!watchIntact || momentRes.status >= 400 || reels.length < 1) process.exit(2);

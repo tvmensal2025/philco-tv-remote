@@ -1,0 +1,157 @@
+{
+  "assets": [
+    {
+      "id": "factory-flash",
+      "pack": "factory-alpha",
+      "file": "factory/join-flash.webm",
+      "role": "join",
+      "blend": "alpha",
+      "durationMs": 500,
+      "tags": ["flash", "cut", "high-energy"]
+    },
+    {
+      "id": "factory-blur-pulse",
+      "pack": "factory-alpha",
+      "file": "factory/join-blur-pulse.webm",
+      "role": "join",
+      "blend": "alpha",
+      "durationMs": 700,
+      "tags": ["blur", "pulse", "soft"]
+    },
+    {
+      "id": "factory-wipe-up",
+      "pack": "factory-alpha",
+      "file": "factory/join-wipe-up.webm",
+      "role": "join",
+      "blend": "alpha",
+      "durationMs": 700,
+      "tags": ["wipe", "up"]
+    },
+    {
+      "id": "factory-wipe-side",
+      "pack": "factory-alpha",
+      "file": "factory/join-wipe-side.webm",
+      "role": "join",
+      "blend": "alpha",
+      "durationMs": 700,
+      "tags": ["wipe", "side"]
+    },
+    {
+      "id": "factory-leak-warm",
+      "pack": "factory-alpha",
+      "file": "factory/join-leak-warm.webm",
+      "role": "join",
+      "blend": "alpha",
+      "durationMs": 800,
+      "tags": ["leak", "warm", "light"]
+    },
+    {
+      "id": "factory-burn",
+      "pack": "factory-alpha",
+      "file": "factory/join-burn.webm",
+      "role": "join",
+      "blend": "alpha",
+      "durationMs": 750,
+      "tags": ["burn", "film", "edge"]
+    },
+    {
+      "id": "factory-smear",
+      "pack": "factory-alpha",
+      "file": "factory/join-smear.webm",
+      "role": "join",
+      "blend": "alpha",
+      "durationMs": 550,
+      "tags": ["smear", "motion-blur", "fast"]
+    },
+    {
+      "id": "factory-lens-flare",
+      "pack": "factory-alpha",
+      "file": "factory/lens-flare.webm",
+      "role": "lens",
+      "blend": "screen",
+      "durationMs": 850,
+      "tags": ["lens", "flare", "screen"]
+    },
+    {
+      "id": "factory-lens-cool",
+      "pack": "factory-alpha",
+      "file": "factory/lens-cool.webm",
+      "role": "lens",
+      "blend": "alpha",
+      "durationMs": 1100,
+      "tags": ["lens", "filter", "cool"]
+    },
+    {
+      "id": "factory-film-grain",
+      "pack": "factory-alpha",
+      "file": "factory/film-grain.webm",
+      "role": "film",
+      "blend": "alpha",
+      "durationMs": 1200,
+      "tags": ["film", "grain"]
+    },
+    {
+      "id": "factory-dip-white",
+      "pack": "factory-alpha",
+      "file": "factory/join-dip-white.webm",
+      "role": "join",
+      "blend": "alpha",
+      "durationMs": 550,
+      "tags": ["dip", "white", "flash"]
+    },
+    {
+      "id": "factory-zoom",
+      "pack": "factory-alpha",
+      "file": "factory/join-zoom.webm",
+      "role": "join",
+      "blend": "alpha",
+      "durationMs": 600,
+      "tags": ["zoom", "transition"]
+    },
+    {
+      "id": "factory-push",
+      "pack": "factory-alpha",
+      "file": "factory/join-push.webm",
+      "role": "join",
+      "blend": "alpha",
+      "durationMs": 550,
+      "tags": ["push", "wipe"]
+    },
+    {
+      "id": "factory-slide",
+      "pack": "factory-alpha",
+      "file": "factory/join-slide.webm",
+      "role": "join",
+      "blend": "alpha",
+      "durationMs": 600,
+      "tags": ["slide", "wipe"]
+    },
+    {
+      "id": "factory-whip",
+      "pack": "factory-alpha",
+      "file": "factory/join-whip.webm",
+      "role": "join",
+      "blend": "alpha",
+      "durationMs": 400,
+      "tags": ["whip", "smear", "fast"]
+    },
+    {
+      "id": "factory-spin",
+      "pack": "factory-alpha",
+      "file": "factory/join-spin.webm",
+      "role": "join",
+      "blend": "alpha",
+      "durationMs": 550,
+      "tags": ["spin", "rotate"]
+    },
+    {
+      "id": "factory-shake",
+      "pack": "factory-alpha",
+      "file": "factory/join-shake.webm",
+      "role": "join",
+      "blend": "alpha",
+      "durationMs": 350,
+      "tags": ["shake", "impact"]
+    }
+  ]
+}

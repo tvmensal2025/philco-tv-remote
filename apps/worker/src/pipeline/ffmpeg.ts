@@ -1,4 +1,4 @@
-import { cropNeedsPadBlur } from '@reelops/shared';
+import { cropNeedsPadBlur, snapPlaybackSpeed } from '@reelops/shared';
 import { spawn } from 'node:child_process';
 import { mkdir, readdir } from 'node:fs/promises';
 import path from 'node:path';
@@ -24,13 +24,18 @@ import {
 import {
   ffmpegSourceCrop,
   joinOverlayFilter,
+  joinTimelineStarts,
   logoOverlayFilter,
   endCardPlateFilter,
   masterFinish,
+  packOverlayFilter,
   takeFilter,
   takeFilterStatic,
+  takeTrimFilter,
   xfadeChain,
+  type PackOverlayHit,
 } from './finish.js';
+import { loadFxCatalogFromDisk, resolveFxAssetPath } from './fx-assets.js';
 import {
   isFfmpegMemoryError,
   renderProfileOrder,
@@ -333,43 +338,58 @@ export async function renderVertical(
   if (!plan.scenes.length) throw new Error('NO_SCENES_IN_PLAN');
   const start = config.RENDER_PROFILE;
   const order = renderProfileOrder(start);
+  const variants: ReelPlan[] = [plan];
+  if (
+    plan.scenes.some(
+      (scene) => snapPlaybackSpeed(scene.speed ?? 1) !== 1 || Boolean(scene.fxAssetId),
+    )
+  ) {
+    variants.push({
+      ...plan,
+      scenes: plan.scenes.map((scene) => ({ ...scene, speed: 1, fxAssetId: undefined })),
+    });
+  }
   let lastError: unknown;
   let memoryPressure = false;
-  for (const profile of order) {
-    try {
-      await renderFinished(plan, output, captionsPath, profile, voicePath, brand);
-      const fell = profile !== start;
-      const used = profile === 'safe' && fell ? 'safe_fallback' : profile;
-      const warning: RenderWarning | undefined = !fell
-        ? undefined
-        : memoryPressure
-          ? 'MOTION_FILTER_MEMORY_FALLBACK'
-          : 'RENDER_PROFILE_DOWNGRADE';
-      log.info(
-        {
-          program: plan.program,
-          render_profile_used: used,
-          render_warning: warning ?? null,
-          scenes: plan.scenes.length,
-          ffmpegThreads: config.FFMPEG_THREADS,
-          brand_logo: Boolean(brand?.logoPath),
-          brand_end_card: Boolean(brand?.endCard),
-        },
-        'render finished',
-      );
-      return { profile: used, warning };
-    } catch (error) {
-      lastError = error;
-      if (isFfmpegMemoryError(error)) memoryPressure = true;
-      log.warn(
-        {
-          program: plan.program,
-          profile,
-          memory: isFfmpegMemoryError(error),
-          err: error instanceof Error ? error.message.slice(0, 400) : String(error),
-        },
-        'render profile failed; downgrading',
-      );
+  for (const [variantIndex, variant] of variants.entries()) {
+    for (const profile of order) {
+      try {
+        await renderFinished(variant, output, captionsPath, profile, voicePath, brand);
+        const fell = profile !== start || variantIndex > 0;
+        const used = profile === 'safe' && fell ? 'safe_fallback' : profile;
+        const warning: RenderWarning | undefined = !fell
+          ? undefined
+          : memoryPressure
+            ? 'MOTION_FILTER_MEMORY_FALLBACK'
+            : 'RENDER_PROFILE_DOWNGRADE';
+        log.info(
+          {
+            program: plan.program,
+            render_profile_used: used,
+            render_warning: warning ?? null,
+            scenes: plan.scenes.length,
+            ffmpegThreads: config.FFMPEG_THREADS,
+            brand_logo: Boolean(brand?.logoPath),
+            brand_end_card: Boolean(brand?.endCard),
+            speed_stripped: variantIndex > 0,
+          },
+          'render finished',
+        );
+        return { profile: used, warning };
+      } catch (error) {
+        lastError = error;
+        if (isFfmpegMemoryError(error)) memoryPressure = true;
+        log.warn(
+          {
+            program: plan.program,
+            profile,
+            memory: isFfmpegMemoryError(error),
+            speed_stripped: variantIndex > 0,
+            err: error instanceof Error ? error.message.slice(0, 400) : String(error),
+          },
+          'render profile failed; downgrading',
+        );
+      }
     }
   }
   throw lastError instanceof Error ? lastError : new Error('RENDER_FAILED');
@@ -401,12 +421,13 @@ async function renderFinished(
   const logoInputIndex = logoPath ? nextInput++ : undefined;
 
   if (profile === 'safe') {
-    const videoFilters = plan.scenes.map((scene, index) =>
+    const scenes = plan.scenes.map((scene) => ({ ...scene, speed: 1, fxAssetId: undefined }));
+    const videoFilters = scenes.map((scene, index) =>
       scene.cropMode === 'pad_blur' || cropNeedsPadBlur(scene)
         ? takeFilterStatic({ ...scene, cropTight: true, punchIn: false }, index)
-        : `[${index}:v]trim=start=${scene.source_start_offset}:duration=${scene.duration},setpts=PTS-STARTPTS,${ffmpegSourceCrop(scene.crop, scene.cropFilter)}scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,fps=30,setsar=1[v${index}]`,
+        : `[${index}:v]${takeTrimFilter(scene)},${ffmpegSourceCrop(scene.crop, scene.cropFilter)}scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,fps=30,setsar=1[v${index}]`,
     );
-    const concat = `${plan.scenes.map((_, index) => `[v${index}]`).join('')}concat=n=${plan.scenes.length}:v=1:a=0[basev]`;
+    const concat = `${scenes.map((_, index) => `[v${index}]`).join('')}concat=n=${scenes.length}:v=1:a=0[basev]`;
     await mapAndEncode(
       plan,
       args,
@@ -440,8 +461,10 @@ async function renderFinished(
       joinDuration: scene.joinDuration,
     })),
   );
+  const packHits = collectPackOverlayHits(plan, args, nextInput);
+  const packedScenes = new Set(packHits.map((hit) => hit.sceneIndex));
   const overlay = joinOverlayFilter(
-    plan.scenes.map((scene) => ({
+    plan.scenes.map((scene, index) => ({
       duration: scene.duration,
       transition:
         profile === 'high'
@@ -450,14 +473,20 @@ async function renderFinished(
             ? 'cut'
             : scene.transition,
       joinDuration: scene.joinDuration,
-      joinOverlay: scene.joinOverlay,
+      joinOverlay: packedScenes.has(index) ? undefined : scene.joinOverlay,
     })),
   );
   const fadeOut = plan.scenes.at(-1)?.fadeOut !== false;
   const filters = [...videoFilters, chain.filter];
   if (overlay.filter) filters.push(overlay.filter);
+  let videoOut = overlay.output;
+  if (packHits.length) {
+    const packs = packOverlayFilter(packHits, videoOut);
+    if (packs.filter) filters.push(packs.filter);
+    videoOut = packs.output;
+  }
   filters.push(
-    masterFinish(chain.duration, fadeOut, profile === 'high' ? 'high' : 'standard', overlay.output),
+    masterFinish(chain.duration, fadeOut, profile === 'high' ? 'high' : 'standard', videoOut),
   );
   await mapAndEncode(plan, args, filters, '[basev]', output, captionsPath, chain.duration, {
     logoInputIndex,
@@ -502,7 +531,8 @@ async function mapAndEncode(
         (scene) => scene.source_recording_path === plan.audio?.source_recording_path,
       )
     : -1;
-  const ambientIndex = plan.audio ? (audioIndex >= 0 ? audioIndex : 0) : undefined;
+  const speedWarped = plan.scenes.some((scene) => snapPlaybackSpeed(scene.speed ?? 1) !== 1);
+  const ambientIndex = plan.audio && !speedWarped ? (audioIndex >= 0 ? audioIndex : 0) : undefined;
   const hasVoice = typeof brand?.voiceInputIndex === 'number';
   const hasMusic = typeof brand?.musicInputIndex === 'number';
   if (hasMusic) {
@@ -512,6 +542,7 @@ async function mapAndEncode(
         duration,
         ambientInputIndex: ambientIndex,
         ambientStart: plan.audio?.source_start_offset,
+        musicStart: plan.music?.startSeconds,
         voiceInputIndex: hasVoice ? brand!.voiceInputIndex : undefined,
       }),
     );
@@ -548,6 +579,36 @@ async function mapAndEncode(
     output,
   );
   await run('ffmpeg', args);
+}
+
+function collectPackOverlayHits(
+  plan: ReelPlan,
+  args: string[],
+  firstInput: number,
+): PackOverlayHit[] {
+  const catalog = loadFxCatalogFromDisk();
+  if (!catalog.assets.length) return [];
+  const byId = new Map(catalog.assets.map((asset) => [asset.id, asset]));
+  const starts = joinTimelineStarts(plan.scenes);
+  const hits: PackOverlayHit[] = [];
+  let input = firstInput;
+  plan.scenes.forEach((scene, index) => {
+    if (!scene.fxAssetId) return;
+    const asset = byId.get(scene.fxAssetId);
+    if (!asset) return;
+    const file = resolveFxAssetPath(asset);
+    if (!file) return;
+    args.push('-i', file.replaceAll('\\', '/'));
+    hits.push({
+      start: Number((starts[index] ?? 0).toFixed(3)),
+      duration: Math.max(0.12, Math.min(scene.duration, asset.durationMs / 1000)),
+      inputIndex: input,
+      blend: asset.blend,
+      sceneIndex: index,
+    });
+    input += 1;
+  });
+  return hits;
 }
 
 export async function makeThumbnail(input: string, output: string) {

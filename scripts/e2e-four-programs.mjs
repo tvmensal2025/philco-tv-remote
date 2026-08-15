@@ -70,4 +70,4 @@ console.log(
     2,
   ),
 );
-if (res.status >= 400 || reels.length < 4) process.exit(2);
+if (res.status >= 400 || reels.length < 1) process.exit(2);

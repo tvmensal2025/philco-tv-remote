@@ -1,0 +1,35 @@
+{
+  "name": "CenaPronta",
+  "short_name": "CenaPronta",
+  "description": "Suas câmeras viram conteúdo. Envie o vídeo do app da câmera, sem HD.",
+  "start_url": "/enviar",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#0b0f0c",
+  "theme_color": "#005c2e",
+  "lang": "pt-BR",
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ],
+  "share_target": {
+    "action": "/api/share-target",
+    "method": "POST",
+    "enctype": "multipart/form-data",
+    "params": {
+      "title": "title",
+      "text": "text",
+      "url": "url",
+      "files": [
+        {
+          "name": "file",
+          "accept": ["video/*", ".mp4", ".mov", ".webm", ".m4v"]
+        }
+      ]
+    }
+  }
+}

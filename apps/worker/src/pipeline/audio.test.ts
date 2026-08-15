@@ -80,4 +80,13 @@ describe('audio architecture', () => {
     expect(graph).toContain('loudnorm=I=-14');
     expect(graph).toContain('[outa]');
   });
+
+  it('phase-aligns the bed so the downbeat sits at t=0', () => {
+    const graph = mixBackgroundMusicGraph({
+      musicInputIndex: 5,
+      duration: 30,
+      musicStart: 0.84,
+    });
+    expect(graph).toContain('[5:a]atrim=start=0.84:duration=30');
+  });
 });

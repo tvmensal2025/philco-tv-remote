@@ -1,23 +1,46 @@
 'use client';
 
 import Link from 'next/link';
+import { useSearchParams } from 'next/navigation';
 import { useMemo, useState } from 'react';
 import { Film, Search } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { groupFilms, ProgramFilm, type FilmShot } from '@/components/program-film';
+import { IN_FLIGHT_STATUSES } from '@/lib/house-today';
 import { cn } from '@/lib/utils';
 
-type Filter = 'all' | 'ready' | 'approved' | 'published';
+type Filter = 'all' | 'ready' | 'queued' | 'failed' | 'approved' | 'published';
+
+const filters: Array<{ id: Filter; label: string }> = [
+  { id: 'all', label: 'Tudo' },
+  { id: 'ready', label: 'Para o ar' },
+  { id: 'queued', label: 'Na fila' },
+  { id: 'failed', label: 'Falhou' },
+  { id: 'approved', label: 'Aprovados' },
+  { id: 'published', label: 'Publicados' },
+];
+
+function matchesFilter(status: string, filter: Filter) {
+  if (filter === 'all') return true;
+  if (filter === 'queued')
+    return IN_FLIGHT_STATUSES.includes(status as (typeof IN_FLIGHT_STATUSES)[number]);
+  return status === filter;
+}
 
 export default function ReelsLibrary({ reels }: { reels: FilmShot[] }) {
+  const searchParams = useSearchParams();
+  const requested = searchParams.get('status');
+  const initial: Filter = filters.some((item) => item.id === requested)
+    ? (requested as Filter)
+    : 'all';
   const [query, setQuery] = useState('');
-  const [filter, setFilter] = useState<Filter>('all');
+  const [filter, setFilter] = useState<Filter>(initial);
 
   const films = useMemo(() => {
     const needle = query.trim().toLocaleLowerCase('pt-BR');
     const matched = reels.filter((reel) => {
-      if (filter !== 'all' && reel.status !== filter) return false;
+      if (!matchesFilter(reel.status, filter)) return false;
       if (!needle) return true;
       const haystack = `${reel.title ?? ''} ${reel.moments?.label ?? ''}`.toLocaleLowerCase(
         'pt-BR',
@@ -41,25 +64,19 @@ export default function ReelsLibrary({ reels }: { reels: FilmShot[] }) {
           />
         </div>
         <div className="flex items-center gap-2 overflow-x-auto">
-          {(['all', 'ready', 'approved', 'published'] as Filter[]).map((item) => (
+          {filters.map((item) => (
             <button
-              key={item}
+              key={item.id}
               type="button"
-              onClick={() => setFilter(item)}
+              onClick={() => setFilter(item.id)}
               className={cn(
                 'inline-flex shrink-0 rounded-full px-4 py-1.5 text-sm font-medium transition-colors',
-                filter === item
+                filter === item.id
                   ? 'bg-primary text-primary-foreground'
                   : 'bg-muted text-muted-foreground hover:text-foreground',
               )}
             >
-              {item === 'all'
-                ? 'Tudo'
-                : item === 'ready'
-                  ? 'Para o ar'
-                  : item === 'approved'
-                    ? 'Aprovados'
-                    : 'Publicados'}
+              {item.label}
             </button>
           ))}
         </div>
@@ -75,7 +92,7 @@ export default function ReelsLibrary({ reels }: { reels: FilmShot[] }) {
             <p className="mt-2 mb-6 max-w-sm text-sm text-muted-foreground">
               {reels.length
                 ? 'Limpe o filtro para ver os instantes.'
-                : 'Abra a sala e gere. Os quatro programas nascem juntos.'}
+                : 'Gere do último take. Um filme por momento.'}
             </p>
             {reels.length ? (
               <Button
@@ -89,7 +106,7 @@ export default function ReelsLibrary({ reels }: { reels: FilmShot[] }) {
               </Button>
             ) : (
               <Button asChild>
-                <Link href="/recordings">Abrir a sala</Link>
+                <Link href="/">Gerar do último take</Link>
               </Button>
             )}
           </CardContent>

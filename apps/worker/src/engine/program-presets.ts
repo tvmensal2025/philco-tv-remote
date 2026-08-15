@@ -1,8 +1,7 @@
 import type { EditProgram, Playbook } from '@reelops/shared';
 import {
-  fitBeatsToMusicBed,
-  MUSIC_BED_SECONDS,
   playbookFor,
+  playbookForDuration,
   programPresetSpecSchema,
   specToPlaybook,
 } from '@reelops/shared';
@@ -11,9 +10,14 @@ import { db, log } from '../services.js';
 const CACHE_MS = 15_000;
 let cache: { at: number; books: Partial<Record<EditProgram, Playbook>> } | null = null;
 
-export async function loadPublishedPlaybook(program: EditProgram): Promise<Playbook> {
+export async function loadPublishedPlaybook(
+  program: EditProgram,
+  durationSeconds?: number,
+): Promise<Playbook> {
   const books = await loadPublishedPlaybooks();
-  return books[program] ?? playbookFor(program);
+  const override = books[program];
+  if (durationSeconds) return playbookForDuration(program, durationSeconds, override ?? null);
+  return override ?? playbookFor(program);
 }
 
 export async function loadPublishedPlaybooks(): Promise<Partial<Record<EditProgram, Playbook>>> {
@@ -29,11 +33,7 @@ export async function loadPublishedPlaybooks(): Promise<Partial<Record<EditProgr
       const parsed = programPresetSpecSchema.safeParse(row.spec);
       if (!parsed.success) continue;
       if (parsed.data.program !== row.program) continue;
-      books[parsed.data.program] = specToPlaybook({
-        ...parsed.data,
-        targetDuration: MUSIC_BED_SECONDS,
-        beats: fitBeatsToMusicBed(parsed.data.beats, MUSIC_BED_SECONDS),
-      });
+      books[parsed.data.program] = specToPlaybook(parsed.data);
     }
     cache = { at: Date.now(), books };
     return books;

@@ -4,6 +4,9 @@ import {
   cropNeedsPadBlur,
   isDeliverySourceCrop,
   resolvedJoinOverlay,
+  snapPlaybackSpeed,
+  takeSourceSeconds,
+  type FxBlend,
 } from '@reelops/shared';
 
 export type JoinName = 'cut' | 'dissolve' | 'fadeblack' | 'fadein';
@@ -48,6 +51,7 @@ export function joinedDuration(
 type TakeScene = {
   source_start_offset: number;
   duration: number;
+  speed?: number;
   fadeIn?: boolean;
   punchIn?: boolean;
   role?: string;
@@ -58,6 +62,17 @@ type TakeScene = {
   cropFilter?: string;
   shotStyle?: string;
 };
+
+export function takeTrimFilter(scene: TakeScene) {
+  const speed = snapPlaybackSpeed(scene.speed ?? 1);
+  const source = takeSourceSeconds(scene.duration, speed);
+  const trim = `trim=start=${scene.source_start_offset}:duration=${source},setpts=PTS-STARTPTS`;
+  if (speed === 1) return trim;
+  if (speed < 1) {
+    return `${trim},minterpolate=fps=60:mi_mode=mci,setpts=PTS/${speed}`;
+  }
+  return `${trim},setpts=PTS/${speed}`;
+}
 
 export function ffmpegSourceCrop(bbox?: number[] | null, cropFilter?: string) {
   if (cropFilter) return cropFilter.endsWith(',') ? cropFilter : `${cropFilter},`;
@@ -80,7 +95,7 @@ function padBlurGraph(scene: TakeScene, index: number, duration: number, grade: 
   const split = crop ? `${crop},split` : 'split';
   const fadeIn = scene.fadeIn ? ',fade=t=in:st=0:d=0.7:color=black' : '';
   return [
-    `[${index}:v]trim=start=${scene.source_start_offset}:duration=${duration},setpts=PTS-STARTPTS,${split}[fg${index}][bg${index}]`,
+    `[${index}:v]${takeTrimFilter(scene)},${split}[fg${index}][bg${index}]`,
     `[bg${index}]scale=270:480:force_original_aspect_ratio=increase,crop=270:480,gblur=sigma=16,scale=1080:1920,eq=brightness=-0.08:saturation=0.82[bg${index}b]`,
     `[fg${index}]scale=1080:1920:force_original_aspect_ratio=decrease[fg${index}s]`,
     `[bg${index}b][fg${index}s]overlay=(W-w)/2:(H-h)/2,${grade},fps=30,setsar=1,format=yuv420p${fadeIn}[v${index}]`,
@@ -107,7 +122,7 @@ export function takeFilter(scene: TakeScene, index: number) {
         ? `${sourceCrop}scale=1296:2304:force_original_aspect_ratio=increase,crop=1296:2304,scale='1296*(1+0.07*t/${duration})':'2304*(1+0.07*t/${duration})':eval=frame,crop=1080:1920`
         : lockedVerticalScale(sourceCrop);
   const fadeIn = scene.fadeIn ? ',fade=t=in:st=0:d=0.7:color=black' : '';
-  return `[${index}:v]trim=start=${scene.source_start_offset}:duration=${duration},setpts=PTS-STARTPTS,${reframe},${grade},fps=30,setsar=1,format=yuv420p${fadeIn}[v${index}]`;
+  return `[${index}:v]${takeTrimFilter(scene)},${reframe},${grade},fps=30,setsar=1,format=yuv420p${fadeIn}[v${index}]`;
 }
 
 export function takeFilterStatic(scene: TakeScene, index: number) {
@@ -125,7 +140,7 @@ export function takeFilterStatic(scene: TakeScene, index: number) {
         ? `${sourceCrop}scale=1188:2112:force_original_aspect_ratio=increase,crop=1188:2112,scale='1188*(1+0.055*t/${duration})':'2112*(1+0.055*t/${duration})':eval=frame,crop=1080:1920`
         : lockedVerticalScale(sourceCrop);
   const fadeIn = scene.fadeIn ? ',fade=t=in:st=0:d=0.7:color=black' : '';
-  return `[${index}:v]trim=start=${scene.source_start_offset}:duration=${duration},setpts=PTS-STARTPTS,${punch},${grade},fps=30,setsar=1,format=yuv420p${fadeIn}[v${index}]`;
+  return `[${index}:v]${takeTrimFilter(scene)},${punch},${grade},fps=30,setsar=1,format=yuv420p${fadeIn}[v${index}]`;
 }
 
 export function xfadeChain(
@@ -193,6 +208,56 @@ export function joinOverlayFilter(
     current = dest;
   });
   return { filter: parts.join(';'), output: current };
+}
+
+export type PackOverlayHit = {
+  start: number;
+  duration: number;
+  inputIndex: number;
+  blend: FxBlend;
+  sceneIndex: number;
+};
+
+export function packOverlayFilter(
+  hits: PackOverlayHit[],
+  input: string,
+  output = 'pk',
+): { filter: string; output: string } {
+  if (!hits.length) return { filter: '', output: input };
+  const parts: string[] = [];
+  let current = input;
+  hits.forEach((hit, index) => {
+    const src = `pkfx${index}`;
+    const dest = index === hits.length - 1 ? output : `pk${index}`;
+    const scaled =
+      hit.blend === 'alpha'
+        ? `[${hit.inputIndex}:v]format=yuva420p,scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,fps=30,setpts=PTS+${hit.start}/TB[${src}]`
+        : `[${hit.inputIndex}:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,fps=30,setpts=PTS+${hit.start}/TB[${src}]`;
+    parts.push(scaled);
+    if (hit.blend === 'screen' || hit.blend === 'add') {
+      const mode = hit.blend === 'add' ? 'addition' : 'screen';
+      parts.push(
+        `[${current}][${src}]blend=all_mode=${mode}:shortest=0:enable='between(t,${hit.start},${Number((hit.start + hit.duration).toFixed(3))})'[${dest}]`,
+      );
+    } else {
+      parts.push(`[${current}][${src}]overlay=0:0:eof_action=pass:format=auto[${dest}]`);
+    }
+    current = dest;
+  });
+  return { filter: parts.join(';'), output: current };
+}
+
+export function joinTimelineStarts(
+  scenes: { duration: number; transition: string; joinDuration?: number }[],
+) {
+  const starts: number[] = [0];
+  let elapsed = scenes[0]?.duration ?? 0;
+  for (let index = 1; index < scenes.length; index += 1) {
+    const spec = joinSpec(scenes[index]!.transition, scenes[index]!.joinDuration);
+    starts.push(Math.max(0, elapsed - spec.duration));
+    elapsed = elapsed + scenes[index]!.duration - spec.duration;
+  }
+  return starts;
 }
 
 export function masterFinish(

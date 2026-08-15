@@ -17,6 +17,8 @@ export const metadata: Metadata = {
   title: { default: 'CenaPronta — Suas câmeras viram conteúdo.', template: '%s · CenaPronta' },
   description: 'Geração automática de Reels para restaurantes a partir das câmeras da operação.',
   applicationName: 'CenaPronta',
+  manifest: '/manifest.webmanifest',
+  appleWebApp: { capable: true, title: 'CenaPronta', statusBarStyle: 'black-translucent' },
   robots: { index: false, follow: false },
 };
 

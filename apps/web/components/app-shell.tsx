@@ -2,20 +2,16 @@
 
 import { createBrowserClient } from '@supabase/ssr';
 import {
-  Camera,
   CheckCircle2,
   ChevronDown,
   ChevronLeft,
   ChevronRight,
   Clapperboard,
-  Clock,
   LayoutDashboard,
   LogOut,
   Menu,
   Settings,
   Shield,
-  Sparkles,
-  Video,
 } from 'lucide-react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
@@ -40,27 +36,19 @@ const navigation = [
     group: 'A casa',
     items: [
       { href: '/', label: 'Início', icon: LayoutDashboard },
-      { href: '/recordings', label: 'Sala', icon: Video },
-      { href: '/reels', label: 'Reels', icon: Clapperboard },
-      { href: '/moments', label: 'Turno', icon: Clock },
-    ],
-  },
-  {
-    group: 'Ajustes',
-    items: [
-      { href: '/cameras', label: 'Câmeras', icon: Camera },
-      { href: '/estudio', label: 'Estúdio', icon: Sparkles },
+      { href: '/reels', label: 'Filmes', icon: Clapperboard },
       { href: '/settings', label: 'Conta', icon: Settings },
     ],
   },
 ];
 
 const pageMeta: Record<string, { title: string; description: string }> = {
-  '/': { title: 'Hoje', description: 'O que o turno já virou filme.' },
-  '/moments': { title: 'Turno', description: 'Cada instante que virou Reel.' },
-  '/reels': { title: 'Reels', description: 'Revisar, aprovar, publicar.' },
+  '/enviar': { title: 'Enviar', description: 'Mande o vídeo do celular. Sem HD.' },
+  '/moments': { title: 'Turno', description: 'Cada instante que virou filme.' },
+  '/reels': { title: 'Filmes', description: 'Revisar, aprovar, baixar.' },
+  '/editor': { title: 'Editor', description: 'Timeline do projeto. O MP4 é só o export.' },
   '/cameras': { title: 'Câmeras', description: 'Os ângulos da casa.' },
-  '/recordings': { title: 'Sala', description: 'O gravador manda para cá. Daqui sai o Reel.' },
+  '/recordings': { title: 'Fita', description: 'Escolha o instante na gravação.' },
   '/estudio': { title: 'Estúdio', description: 'Ritmo, o que roda sozinho, o que priorizar.' },
   '/automation': { title: 'Estúdio', description: 'O que o sistema faz sozinho no turno.' },
   '/rules': { title: 'Estúdio', description: 'O que priorizar na hora de cortar.' },
@@ -102,11 +90,17 @@ export default function AppShell(props: Props) {
     }
   }
   if (
-    ['/automation', '/rules', '/styles'].some(
-      (path) => pathname === path || pathname.startsWith(`${path}/`),
-    )
+    [
+      '/automation',
+      '/rules',
+      '/styles',
+      '/estudio',
+      '/cameras',
+      '/recordings',
+      '/integrations',
+    ].some((path) => pathname === path || pathname.startsWith(`${path}/`))
   ) {
-    activePath = '/estudio';
+    activePath = '/settings';
   }
 
   const meta = pageMeta[pathname] ||

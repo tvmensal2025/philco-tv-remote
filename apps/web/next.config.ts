@@ -26,7 +26,18 @@ const config: NextConfig = {
     proxyClientMaxBodySize: '256mb',
   },
   async headers() {
-    return [{ source: '/(.*)', headers: securityHeaders }];
+    return [
+      { source: '/(.*)', headers: securityHeaders },
+      {
+        source: '/enviar',
+        headers: [
+          {
+            key: 'Permissions-Policy',
+            value: 'camera=(self), microphone=(), geolocation=(), payment=()',
+          },
+        ],
+      },
+    ];
   },
   async redirects() {
     return [

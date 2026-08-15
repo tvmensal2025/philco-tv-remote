@@ -1,5 +1,6 @@
 import { dashboardContext } from '@/lib/dashboard-context';
 import { hasInstagramPublisher } from '@/lib/env';
+import type { ReelCutMetadata } from '@/lib/house-cut';
 import { notFound } from 'next/navigation';
 import ReelDetails from '@/components/reel-details';
 
@@ -9,7 +10,7 @@ export default async function ReelPage({ params }: { params: Promise<{ id: strin
   const { data: reel } = await context.supabase
     .from('reels')
     .select(
-      'id,moment_id,status,title,thumbnail_path,output_path,progress,metadata,created_at,restaurants(name),moments(occurred_at,label)',
+      'id,moment_id,status,title,caption,thumbnail_path,output_path,progress,metadata,created_at,restaurants(name),moments(occurred_at,label)',
     )
     .eq('id', id)
     .eq('tenant_id', context.tenantId)
@@ -21,7 +22,7 @@ export default async function ReelPage({ params }: { params: Promise<{ id: strin
     ? await context.supabase
         .from('reels')
         .select(
-          'id,moment_id,status,title,thumbnail_path,output_path,progress,metadata,created_at,moments(occurred_at,label)',
+          'id,moment_id,status,title,caption,thumbnail_path,output_path,progress,metadata,created_at,moments(occurred_at,label)',
         )
         .eq('tenant_id', context.tenantId)
         .eq('moment_id', reel.moment_id)
@@ -46,9 +47,7 @@ export default async function ReelPage({ params }: { params: Promise<{ id: strin
   }) => ({
     ...row,
     metadata:
-      row.metadata && typeof row.metadata === 'object'
-        ? (row.metadata as { program?: string })
-        : null,
+      row.metadata && typeof row.metadata === 'object' ? (row.metadata as ReelCutMetadata) : null,
     moments: Array.isArray(row.moments) ? (row.moments[0] ?? null) : (row.moments ?? null),
     restaurants: Array.isArray(row.restaurants)
       ? (row.restaurants[0] ?? null)

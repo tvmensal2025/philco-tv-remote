@@ -81,11 +81,11 @@ export const config = z
         const raw =
           (typeof value === 'string' && value.trim()
             ? value
-            : process.env.VISION_PROVIDER_PRIMARY) ?? 'auto';
+            : process.env.VISION_PROVIDER_PRIMARY) ?? 'openai';
         const normalized = String(raw).trim().toLowerCase();
-        return ['openai', 'gemini', 'auto'].includes(normalized) ? normalized : 'auto';
+        return ['openai', 'gemini', 'auto'].includes(normalized) ? normalized : 'openai';
       },
-      z.enum(['openai', 'gemini', 'auto']).default('auto'),
+      z.enum(['openai', 'gemini', 'auto']).default('openai'),
     ),
     VISION_PROVIDER_SECONDARY: z.preprocess(
       (value) => {
@@ -187,7 +187,7 @@ export const config = z
         typeof value === 'string'
           ? ['true', '1', 'yes'].includes(value.trim().toLowerCase())
           : value,
-      z.boolean().default(false),
+      z.boolean().default(true),
     ),
     ENABLE_TRACKING_QC: z.preprocess(
       (value) =>

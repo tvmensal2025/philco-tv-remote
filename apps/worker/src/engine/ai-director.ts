@@ -17,6 +17,7 @@ import {
   validateDirectorReferences,
   type DirectorCandidate,
 } from './scene-resolver.js';
+import { loadFxCatalogFromDisk } from '../pipeline/fx-assets.js';
 import type { ClipCandidate } from '../adapters/analyzer.js';
 
 export type DirectorInput = {
@@ -96,13 +97,26 @@ export async function decideWithAiDirector(input: DirectorInput): Promise<{
       {
         role: 'system',
         content:
-          'Return only VideoEditDecisionV2 JSON. schemaVersion=2.0 scoreScale=0-100. cameraId and recordingId MUST be copied from candidates (real UUIDs). cameraLabel like C4 is display-only and MUST NOT be used as cameraId or recordingId. sourceStartMs/sourceEndMs are milliseconds relative to the recording, never Unix time. Do not invent UUIDs, prices, discounts, ingredients, awards or dates. If only one camera is in candidates, that is valid — use it. Neutral title if unsure, or null. No markdown.',
+          'Return only VideoEditDecisionV2 JSON. schemaVersion=2.0 scoreScale=0-100. cameraId and recordingId MUST be copied from candidates (real UUIDs). cameraLabel like C4 is display-only and MUST NOT be used as cameraId or recordingId. sourceStartMs/sourceEndMs are milliseconds relative to the recording, never Unix time. playbackSpeed only 0.5, 0.75, 1, 1.5 or 2. At most one slow-mo (0.5/0.75) per reel unless durationTargetMs>=55000 (then two). Never slow a static plate. Never speed-up a food punch-in. fxAssetId must be copied from fxCatalog or omitted. Casa: no smash. Do not invent UUIDs, prices, discounts, ingredients, awards or dates. If only one camera is in candidates, that is valid — use it. Neutral title if unsure, or null. No markdown.',
       },
       {
         role: 'user',
         content: JSON.stringify({
           playbook: playbooks[input.plan.program] ?? playbooks.casa,
           program: input.plan.program,
+          durationTargetMs: input.plan.duration * 1000,
+          fxCatalog: loadFxCatalogFromDisk().assets.map((asset) => ({
+            id: asset.id,
+            pack: asset.pack,
+            role: asset.role,
+            tags: asset.tags,
+          })),
+          fxBudget: {
+            maxJoinPacks: input.plan.program === 'casa' ? 1 : input.plan.duration >= 55 ? 3 : 2,
+            maxSmash: input.plan.program === 'casa' ? 0 : 1,
+            maxLens: 1,
+            maxSlowMo: input.plan.duration >= 55 ? 2 : 1,
+          },
           brand: input.brand ?? null,
           candidates: candidates.map((item) => ({
             cameraId: item.cameraId,

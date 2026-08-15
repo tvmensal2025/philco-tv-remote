@@ -6,6 +6,7 @@ import {
   joinSpec,
   logoOverlayFilter,
   endCardPlateFilter,
+  packOverlayFilter,
   takeFilter,
   takeFilterStatic,
   xfadeChain,
@@ -63,6 +64,19 @@ describe('finish graph', () => {
     expect(high).toContain('eval=frame');
     expect(standard).not.toContain('eval=frame');
     expect(standard).toContain('crop=1080:1920');
+  });
+
+  it('slows with minterpolate and speeds with setpts', () => {
+    const filter = takeFilter(
+      { source_start_offset: 1, duration: 3, speed: 0.5, motion: 'none' },
+      0,
+    );
+    expect(filter).toContain('minterpolate=fps=60');
+    expect(filter).toContain('duration=1.5');
+    const fast = takeFilter({ source_start_offset: 1, duration: 3, speed: 2, motion: 'none' }, 0);
+    expect(fast).toContain('setpts=PTS/2');
+    expect(fast).not.toContain('minterpolate');
+    expect(fast).toContain('duration=6');
   });
 
   it('puts the YOLO window before the 9:16 scale', () => {
@@ -144,6 +158,25 @@ describe('finish graph', () => {
     expect(overlay.filter).toContain('color=c=0xFFFFFF@0.82');
     expect(overlay.filter).not.toContain('eval=frame');
     expect(joinOverlayFilter([{ duration: 2, transition: 'cut' }]).filter).toBe('');
+  });
+
+  it('overlays a catalog pack with alpha or screen at the join', () => {
+    const alpha = packOverlayFilter(
+      [{ start: 3.2, duration: 0.8, inputIndex: 4, blend: 'alpha', sceneIndex: 1 }],
+      'ov',
+    );
+    expect(alpha.filter).toContain('[4:v]format=yuva420p');
+    expect(alpha.filter).toContain('overlay=0:0:eof_action=pass');
+    const screen = packOverlayFilter(
+      [{ start: 3.2, duration: 0.8, inputIndex: 5, blend: 'screen', sceneIndex: 1 }],
+      'xf',
+    );
+    expect(screen.filter).toContain('blend=all_mode=screen');
+    const add = packOverlayFilter(
+      [{ start: 1, duration: 0.5, inputIndex: 6, blend: 'add', sceneIndex: 1 }],
+      'xf',
+    );
+    expect(add.filter).toContain('blend=all_mode=addition');
   });
 
   it('places the partner logo at the Casa safe-area box', () => {

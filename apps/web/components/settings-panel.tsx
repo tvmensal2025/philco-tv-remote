@@ -124,21 +124,46 @@ export default function SettingsPanel({
       <div className="space-y-6">
         <div className="grid gap-3 sm:grid-cols-2">
           <Link
+            href="/enviar"
+            className="rounded-xl border bg-card p-4 shadow-sm transition-colors hover:bg-muted/40"
+          >
+            <p className="text-sm font-semibold">Enviar do celular</p>
+            <p className="mt-1 text-sm text-muted-foreground">
+              Sem HD: baixe no app da câmera e mande para o CenaPronta.
+            </p>
+          </Link>
+          <Link
+            href="/recordings"
+            className="rounded-xl border bg-card p-4 shadow-sm transition-colors hover:bg-muted/40"
+          >
+            <p className="text-sm font-semibold">Escolher na fita</p>
+            <p className="mt-1 text-sm text-muted-foreground">
+              Abrir a gravação e marcar o instante certo.
+            </p>
+          </Link>
+          <Link
+            href="/cameras"
+            className="rounded-xl border bg-card p-4 shadow-sm transition-colors hover:bg-muted/40"
+          >
+            <p className="text-sm font-semibold">Câmeras</p>
+            <p className="mt-1 text-sm text-muted-foreground">Os ângulos da casa.</p>
+          </Link>
+          <Link
+            href="/estudio"
+            className="rounded-xl border bg-card p-4 shadow-sm transition-colors hover:bg-muted/40"
+          >
+            <p className="text-sm font-semibold">Estúdio</p>
+            <p className="mt-1 text-sm text-muted-foreground">
+              Ritmo, o que roda sozinho, o que priorizar.
+            </p>
+          </Link>
+          <Link
             href="/integrations"
             className="rounded-xl border bg-card p-4 shadow-sm transition-colors hover:bg-muted/40"
           >
             <p className="text-sm font-semibold">WhatsApp e Instagram</p>
             <p className="mt-1 text-sm text-muted-foreground">
-              Onde o Reel chega depois da aprovação.
-            </p>
-          </Link>
-          <Link
-            href="/analytics"
-            className="rounded-xl border bg-card p-4 shadow-sm transition-colors hover:bg-muted/40"
-          >
-            <p className="text-sm font-semibold">Relatórios do turno</p>
-            <p className="mt-1 text-sm text-muted-foreground">
-              O que virou filme e o que foi ao ar.
+              Onde o filme chega depois da aprovação.
             </p>
           </Link>
         </div>

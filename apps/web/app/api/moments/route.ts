@@ -1,10 +1,5 @@
 import { NextResponse } from 'next/server';
-import {
-  decideMomentCreate,
-  editProgramLabels,
-  editPrograms,
-  markMomentSchema,
-} from '@reelops/shared';
+import { decideMomentCreate, editProgramLabels, markMomentSchema } from '@reelops/shared';
 import { requireContext, requireRole, adminClient } from '@/lib/supabase';
 import { isAuthBypass } from '@/lib/env';
 import { assertQueueAvailable, videoQueue } from '@/lib/queue';
@@ -142,51 +137,50 @@ export async function POST(request: Request) {
     const created: { id: string }[] = [];
     try {
       const delay = Math.max(0, windowEnd.getTime() + 15_000 - Date.now());
-      for (const program of editPrograms) {
-        const titleBase = input.label || 'Momento especial';
-        const { data: reel, error: reelError } = await admin
-          .from('reels')
-          .insert({
-            tenant_id: ctx.tenantId,
-            restaurant_id: input.restaurantId,
-            moment_id: moment.id,
-            title: `${titleBase} · ${editProgramLabels[program]}`,
-            metadata: { program },
-          })
-          .select()
-          .single();
-        if (reelError || !reel) throw reelError ?? new Error('REEL_INSERT');
-        created.push(reel);
-        await admin.from('job_events').insert({
+      const program = 'casa' as const;
+      const titleBase = input.label || 'Momento especial';
+      const { data: reel, error: reelError } = await admin
+        .from('reels')
+        .insert({
           tenant_id: ctx.tenantId,
-          reel_id: reel.id,
-          status: 'queued',
-          message: `Programa ${editProgramLabels[program]}`,
-        });
-        await videoQueue().add(
-          'render-reel',
-          {
-            jobId: reel.id,
-            tenantId: ctx.tenantId,
-            restaurantId: input.restaurantId,
-            momentId: moment.id,
-            reelId: reel.id,
-            occurredAt: occurredAt.toISOString(),
-            windowStart: windowStart.toISOString(),
-            windowEnd: windowEnd.toISOString(),
-            program,
-          },
-          {
-            jobId: reel.id,
-            delay,
-            priority: 1,
-            attempts: 8,
-            backoff: { type: 'exponential', delay: 10_000 },
-            removeOnComplete: { age: 24 * 3600, count: 1000 },
-            removeOnFail: { age: 7 * 24 * 3600, count: 5000 },
-          },
-        );
-      }
+          restaurant_id: input.restaurantId,
+          moment_id: moment.id,
+          title: `${titleBase} · ${editProgramLabels[program]}`,
+          metadata: { program },
+        })
+        .select()
+        .single();
+      if (reelError || !reel) throw reelError ?? new Error('REEL_INSERT');
+      created.push(reel);
+      await admin.from('job_events').insert({
+        tenant_id: ctx.tenantId,
+        reel_id: reel.id,
+        status: 'queued',
+        message: 'Casa',
+      });
+      await videoQueue().add(
+        'render-reel',
+        {
+          jobId: reel.id,
+          tenantId: ctx.tenantId,
+          restaurantId: input.restaurantId,
+          momentId: moment.id,
+          reelId: reel.id,
+          occurredAt: occurredAt.toISOString(),
+          windowStart: windowStart.toISOString(),
+          windowEnd: windowEnd.toISOString(),
+          program,
+        },
+        {
+          jobId: reel.id,
+          delay,
+          priority: 1,
+          attempts: 8,
+          backoff: { type: 'exponential', delay: 10_000 },
+          removeOnComplete: { age: 24 * 3600, count: 1000 },
+          removeOnFail: { age: 7 * 24 * 3600, count: 5000 },
+        },
+      );
     } catch (queueError) {
       for (const reel of created) {
         await admin
@@ -214,10 +208,10 @@ export async function POST(request: Request) {
       event_type: 'moment.created',
       entity_type: 'moment',
       entity_id: moment.id,
-      message: 'Momento marcado em 4 programas',
+      message: 'Momento marcado',
       metadata: {
         source: input.occurredAt ? 'manual' : 'latest-coverage',
-        programs: editPrograms,
+        programs: ['casa'],
         clientRequestId: input.clientRequestId ?? null,
       },
     });
