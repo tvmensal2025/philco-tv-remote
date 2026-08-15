@@ -32,7 +32,12 @@ export function decisionFromReelPlan(
       sourceStartMs: startMs,
       sourceEndMs: Math.max(startMs + 1, endMs),
       role: sceneRoles.includes(role as (typeof sceneRoles)[number]) ? role : 'body',
-      cropStrategy: scene.crop ? ('subject_focus' as const) : ('center_crop' as const),
+      cropStrategy:
+        scene.cropMode === 'pad_blur'
+          ? ('pad_blur' as const)
+          : scene.crop
+            ? ('subject_focus' as const)
+            : ('center_crop' as const),
       motion: mapLegacyMotion(scene.motion, scene.punchIn),
       transitionOut: mapLegacyTransition(scene.transition),
       importance: Math.round(Math.max(0, Math.min(100, 100 - index * 8))),

@@ -94,7 +94,7 @@ import {
 import { config } from '../config.js';
 import { db, log } from '../services.js';
 import { workerId } from '../worker-id.js';
-import { ReelPlanner } from '../engine/planner.js';
+import { houseCutFromPlan, ReelPlanner } from '../engine/planner.js';
 import { loadPublishedPlaybook } from '../engine/program-presets.js';
 import type { PeakHit } from '../engine/peak-snap.js';
 import type { StyleName } from '../engine/rhythm.js';
@@ -875,6 +875,7 @@ async function processClaimedVideo(
         confidence: plan.confidence,
         privacy_risk: plan.privacyRisk,
         recommended_use: plan.recommendedUse,
+        house_cut: houseCutFromPlan(renderPlan),
         camera_rankings: plan.cameraRankings,
         best_frames: plan.bestFrames,
         frames_by_camera: framesByCamera,

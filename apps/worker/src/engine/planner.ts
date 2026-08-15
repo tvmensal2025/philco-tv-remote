@@ -66,6 +66,26 @@ export type ReelPlan = {
   captionStrategy?: 'none' | 'full';
 };
 
+export type HouseCutTake = {
+  id: string;
+  reason: string;
+  transition: string;
+  cropMode: 'crop' | 'pad_blur' | null;
+  camera: string;
+  duration: number;
+};
+
+export function houseCutFromPlan(plan: Pick<ReelPlan, 'scenes'>): HouseCutTake[] {
+  return plan.scenes.map((scene, index) => ({
+    id: scene.recording_id ?? `${scene.camera_id}-${index + 1}`,
+    reason: scene.reason,
+    transition: scene.transition,
+    cropMode: scene.cropMode ?? null,
+    camera: `C${scene.position}`,
+    duration: Number(scene.duration.toFixed(2)),
+  }));
+}
+
 export class ReelPlanner {
   constructor(
     private readonly visionProvider: SceneAnalyzer,

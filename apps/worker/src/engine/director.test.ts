@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { decisionFromReelPlan } from './director.js';
-import type { ReelPlan } from './planner.js';
+import { houseCutFromPlan, type ReelPlan } from './planner.js';
 
 const plan: ReelPlan = {
   program: 'casa',
@@ -61,5 +61,48 @@ describe('LegacyReelPlannerAdapter', () => {
       reelId: '44444444-4444-4444-4444-444444444444',
     });
     expect(decision.scenes[0]?.cropStrategy).toBe('subject_focus');
+  });
+
+  it('keeps pad_blur when the plan already chose letterbox instead of a hard crop', () => {
+    const withBlur = {
+      ...plan,
+      scenes: [
+        {
+          ...plan.scenes[0]!,
+          crop: [0, 0, 1280, 720] as [number, number, number, number],
+          cropMode: 'pad_blur' as const,
+        },
+      ],
+    };
+    const decision = decisionFromReelPlan(withBlur, {
+      tenantId: '11111111-1111-1111-1111-111111111111',
+      restaurantId: '22222222-2222-2222-2222-222222222222',
+      momentId: '33333333-3333-3333-3333-333333333333',
+      reelId: '44444444-4444-4444-4444-444444444444',
+    });
+    expect(decision.scenes[0]?.cropStrategy).toBe('pad_blur');
+  });
+
+  it('writes a short house_cut list from the rendered takes', () => {
+    const cut = houseCutFromPlan({
+      scenes: [
+        {
+          ...plan.scenes[0]!,
+          recording_id: 'rec-1',
+          cropMode: 'pad_blur',
+          duration: 12.345,
+        },
+      ],
+    });
+    expect(cut).toEqual([
+      {
+        id: 'rec-1',
+        reason: 'gancho',
+        transition: 'dissolve',
+        cropMode: 'pad_blur',
+        camera: 'C4',
+        duration: 12.35,
+      },
+    ]);
   });
 });
