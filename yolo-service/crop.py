@@ -57,13 +57,75 @@ def crop_9_16(frame_w: int, frame_h: int, cx: float, cy: float) -> list[int]:
             crop_h = frame_h
             crop_w = int(crop_h * target_ratio)
 
-    crop_w = max(2, min(crop_w, frame_w))
-    crop_h = max(2, min(crop_h, frame_h))
-    x = int(cx - crop_w / 2)
-    y = int(cy - crop_h / 2)
-    x = max(0, min(x, frame_w - crop_w))
-    y = max(0, min(y, frame_h - crop_h))
+    crop_w = _even(max(2, min(crop_w, frame_w)), frame_w)
+    crop_h = _even(max(2, min(crop_h, frame_h)), frame_h)
+    x = max(0, min(_even_floor(cx - crop_w / 2), frame_w - crop_w))
+    y = max(0, min(_even_floor(cy - crop_h / 2), frame_h - crop_h))
     return [x, y, crop_w, crop_h]
+
+
+def _even_floor(value: float) -> int:
+    v = max(0, int(value))
+    return v if v % 2 == 0 else max(0, v - 1)
+
+
+def _even(value: float, cap: int | None = None) -> int:
+    value = max(2, int(value))
+    if value % 2:
+        value += 1
+    if cap is not None:
+        limit = cap if cap % 2 == 0 else cap - 1
+        if value > limit:
+            value = max(2, limit)
+    return value
+
+
+def crop_contain_9_16(
+    frame_w: int,
+    frame_h: int,
+    subject: list[int],
+    pad: float = 0.12,
+) -> tuple[list[int], str, bool]:
+    """Janela 9:16 que contém o bbox. Se o corpo não cabe, pad_blur."""
+    if frame_w < 32 or frame_h < 32 or len(subject) != 4:
+        box = crop_9_16(frame_w, frame_h, frame_w / 2, frame_h / 2)
+        return box, "crop", True
+    sx, sy, sw, sh = [int(v) for v in subject]
+    pad_x = max(8, int(sw * pad))
+    pad_y = max(8, int(sh * pad))
+    x1 = max(0, sx - pad_x)
+    y1 = max(0, sy - pad_y)
+    x2 = min(frame_w, sx + sw + pad_x)
+    y2 = min(frame_h, sy + sh + pad_y)
+    pw, ph = x2 - x1, y2 - y1
+    window_w = _even(min(frame_w, frame_h * 9 / 16), frame_w)
+    if pw <= window_w:
+        x = int(x1 + pw / 2 - window_w / 2)
+        if x1 < x:
+            x = int(x1)
+        if x1 + pw > x + window_w:
+            x = int(x1 + pw - window_w)
+        x = max(0, min(_even_floor(x), frame_w - window_w))
+        tight = pw > window_w * 0.78
+        return [x, 0, window_w, _even(frame_h, frame_h)], "crop", tight
+    x = _even_floor(x1)
+    y = _even_floor(y1)
+    w = _even(pw, frame_w - x)
+    h = _even(ph, frame_h - y)
+    return [x, y, w, h], "pad_blur", True
+
+
+def pick_standing_person(people: list[dict]) -> dict | None:
+    if not people:
+        return None
+
+    def score(person: dict) -> float:
+        _x, _y, w, h = person["bbox"]
+        standing = 1.25 if h > w * 1.15 else 1.0
+        full = 1.15 if person.get("is_full_body") else 1.0
+        return bbox_area(person["bbox"]) * standing * full
+
+    return max(people, key=score)
 
 
 def pose_center(keypoints: list[dict], frame_w: int, frame_h: int) -> tuple[float | None, float | None]:
@@ -161,12 +223,12 @@ def choose_anchor(
             p = max(items, key=lambda b: bbox_area(b["bbox"]))
             x, y = bbox_center(p["bbox"], 0.5)
             return x, y, "plate"
-    if mode == "auto" and people and (plates or food):
+    if mode == "person" and people and (plates or food):
         person = max(people, key=lambda b: bbox_area(b["bbox"]))
         dish = max(plates + food, key=lambda b: bbox_area(b["bbox"]))
         px, py = _person_anchor(person, frame_w, frame_h)
         dx, dy = bbox_center(dish["bbox"], 0.5)
-        return 0.6 * px + 0.4 * dx, 0.6 * py + 0.4 * dy, "person_plate"
+        return 0.55 * px + 0.45 * dx, 0.5 * py + 0.5 * dy, "person_plate"
     if people:
         p = max(people, key=lambda b: bbox_area(b["bbox"]))
         return (*_person_anchor(p, frame_w, frame_h), _person_anchor_name(p))

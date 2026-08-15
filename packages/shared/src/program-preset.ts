@@ -17,6 +17,76 @@ export type MotionName = (typeof motionNames)[number];
 
 export const programCaptionStrategies = ['none', 'full'] as const;
 
+export const programBrandingSchema = z.object({
+  title: z.boolean().default(false),
+  logo: z.boolean().default(false),
+  lowerThird: z.boolean().default(false),
+  cta: z.boolean().default(false),
+  endCard: z.boolean().default(false),
+});
+export type ProgramBranding = z.infer<typeof programBrandingSchema>;
+
+export const emptyProgramBranding: ProgramBranding = {
+  title: false,
+  logo: false,
+  lowerThird: false,
+  cta: false,
+  endCard: false,
+};
+
+const programShortLabels: Record<EditProgram, string> = {
+  casa: 'Casa',
+  oficio: 'Ofício',
+  assinatura: 'Assinatura',
+  pulso: 'Pulso',
+};
+
+export const brandingLayerLabels: Record<keyof ProgramBranding, string> = {
+  title: 'Título',
+  logo: 'Logo',
+  lowerThird: 'Lower third',
+  cta: 'CTA',
+  endCard: 'End card',
+};
+
+export function defaultBrandingFor(program: EditProgram): ProgramBranding {
+  return {
+    title: true,
+    logo: true,
+    lowerThird: program === 'oficio',
+    cta: program === 'pulso',
+    endCard: true,
+  };
+}
+
+export function brandWordmark(name: string) {
+  const parts = name.trim().split(/\s+/).filter(Boolean);
+  if (parts.length >= 2) {
+    return parts
+      .slice(0, 2)
+      .map((part) => part[0] ?? '')
+      .join('')
+      .toUpperCase();
+  }
+  return name.trim().slice(0, 12);
+}
+
+export function programBrandCopy(input: {
+  restaurantName: string;
+  program: EditProgram;
+  cta?: string | null;
+}) {
+  const name = input.restaurantName.trim() || programShortLabels[input.program];
+  const cta = input.cta?.trim().slice(0, 40) || 'Peça no salão';
+  return {
+    title: name.slice(0, 42),
+    lowerThird: `${programShortLabels[input.program]} · ${name}`.slice(0, 48),
+    cta,
+    endCard: name.slice(0, 42),
+    wordmark: brandWordmark(name),
+  };
+}
+
 export const playbookBeatSchema = z.object({
   name: z.string().trim().min(1).max(40),
   roles: z.array(z.enum(cameraRoles)).min(1).max(4),
@@ -33,20 +103,26 @@ export const playbookBeatSchema = z.object({
 });
 export type PlaybookBeat = z.infer<typeof playbookBeatSchema>;
 
-export const programPresetSpecSchema = z.object({
-  schemaVersion: z.literal('1.0'),
-  program: z.enum(editPrograms),
-  join: z.enum(['cut', 'dissolve']),
-  targetDuration: z.number().min(8).max(45),
-  maxShare: z.number().min(0.15).max(0.9),
-  minRoles: z.number().int().min(1).max(4),
-  beats: z.array(playbookBeatSchema).min(3).max(12),
-  captions: z
-    .object({
-      strategy: z.enum(programCaptionStrategies),
-    })
-    .default({ strategy: 'full' }),
-});
+export const programPresetSpecSchema = z
+  .object({
+    schemaVersion: z.literal('1.0'),
+    program: z.enum(editPrograms),
+    join: z.enum(['cut', 'dissolve']),
+    targetDuration: z.number().min(8).max(45),
+    maxShare: z.number().min(0.15).max(0.9),
+    minRoles: z.number().int().min(1).max(4),
+    beats: z.array(playbookBeatSchema).min(3).max(12),
+    captions: z
+      .object({
+        strategy: z.enum(programCaptionStrategies),
+      })
+      .default({ strategy: 'full' }),
+    branding: programBrandingSchema.optional(),
+  })
+  .transform((spec) => ({
+    ...spec,
+    branding: spec.branding ?? defaultBrandingFor(spec.program),
+  }));
 export type ProgramPresetSpec = z.infer<typeof programPresetSpecSchema>;
 
 export type Playbook = {
@@ -57,6 +133,7 @@ export type Playbook = {
   minRoles: number;
   beats: PlaybookBeat[];
   captions: { strategy: 'none' | 'full' };
+  branding: ProgramBranding;
 };
 
 export const joinLabels: Record<JoinName, string> = {
@@ -95,7 +172,7 @@ export const JOIN_OVERLAY: Record<
     fadeOut: 0.14,
     peak: 0.88,
     color: '0xFFFFFF@0.82',
-    preview: 'white',
+    preview: 'radial-gradient(circle at 50% 45%, #ffffff 0%, #fff6e8 38%, transparent 72%)',
   },
   leak: {
     duration: 0.55,
@@ -103,7 +180,8 @@ export const JOIN_OVERLAY: Record<
     fadeOut: 0.28,
     peak: 0.55,
     color: '0xFF7A18@0.48',
-    preview: 'radial-gradient(ellipse at 14% 10%, #ffb060 0%, #ff6a12 32%, transparent 60%)',
+    preview:
+      'radial-gradient(ellipse at 8% 6%, #ffd7a0 0%, #ff7a18 26%, transparent 58%), radial-gradient(ellipse at 88% 18%, #ffb060 0%, transparent 48%)',
   },
   burn: {
     duration: 0.42,
@@ -112,7 +190,7 @@ export const JOIN_OVERLAY: Record<
     peak: 0.72,
     color: '0xFFE0C0@0.7',
     preview:
-      'radial-gradient(ellipse at 80% -6%, #fff6e8 0%, #ff9a4a 34%, #7a1a00 54%, transparent 70%)',
+      'radial-gradient(ellipse at 82% -8%, #fff8ee 0%, #ffb060 22%, #c2410c 44%, #450a0a 58%, transparent 72%), linear-gradient(180deg, rgba(255,230,180,0.55) 0%, transparent 28%)',
   },
 };
 
@@ -158,6 +236,7 @@ export type CatalogEffect = {
       | 'preferPeak'
     >
   >;
+  applyBranding?: Partial<ProgramBranding>;
 };
 
 export const renderEffectCatalog: CatalogEffect[] = [
@@ -333,36 +412,41 @@ export const renderEffectCatalog: CatalogEffect[] = [
     id: 'title',
     group: 'overlay',
     label: 'Título',
-    status: 'architecture',
-    hint: 'Revideo Casa; ENABLE_REVIDEO=false',
+    status: 'real',
+    hint: 'ASS no topo 3,4s — nome do restaurante, Arial 72',
+    applyBranding: { title: true },
   },
   {
     id: 'logo',
     group: 'overlay',
     label: 'Logo',
-    status: 'architecture',
-    hint: 'Revideo fixture; FFmpeg vertical não queima logo',
+    status: 'real',
+    hint: 'PNG do parceiro no canto (90,250); sem ficheiro, wordmark ASS',
+    applyBranding: { logo: true },
   },
   {
     id: 'lower-third',
     group: 'overlay',
     label: 'Lower third',
-    status: 'architecture',
-    hint: 'Primitivo do design system, sem burn no FFmpeg',
+    status: 'real',
+    hint: 'Faixa ASS com o programa e o nome, 6,5s',
+    applyBranding: { lowerThird: true },
   },
   {
     id: 'cta',
     group: 'overlay',
     label: 'CTA',
-    status: 'architecture',
-    hint: 'Campo no decision; render FFmpeg não desenha',
+    status: 'real',
+    hint: 'ASS acima da legenda nos últimos 4s — CTA do restaurante ou “Peça no salão”',
+    applyBranding: { cta: true },
   },
   {
     id: 'end-card',
     group: 'overlay',
     label: 'End card',
-    status: 'architecture',
-    hint: 'Só no caminho Revideo',
+    status: 'real',
+    hint: 'Placa escura 1,55s no fecho com o nome do restaurante',
+    applyBranding: { endCard: true },
   },
 ];
 
@@ -383,6 +467,7 @@ function spec(
     minRoles,
     beats,
     captions: { strategy: 'full' },
+    branding: defaultBrandingFor(program),
   });
 }
 
@@ -398,40 +483,40 @@ const pulsoRoles: CameraRole[][] = [
 ];
 
 export const validatedProgramPresets: Record<EditProgram, ProgramPresetSpec> = {
-  casa: spec('casa', 'dissolve', 20, 0.45, 2, [
+  casa: spec('casa', 'dissolve', 20, 0.9, 1, [
     {
       name: 'gancho',
-      roles: ['ambience'],
+      roles: ['food', 'master', 'ambience', 'side'],
       durationSeconds: 4.2,
-      reason: 'O lugar, já em movimento',
+      reason: 'Imagem forte: a melhor câmera ganha, role é só prior',
       join: 'dissolve',
       fadeIn: true,
-      motion: 'drift',
+      motion: 'none',
       preferPeak: true,
     },
     {
       name: 'servico',
-      roles: ['master'],
+      roles: ['master', 'food'],
       durationSeconds: 4,
-      reason: 'Balcão e acolhida',
+      reason: 'Continuidade da ação ou do prato',
       join: 'dissolve',
-      motion: 'drift',
+      motion: 'none',
       preferPeak: true,
     },
     {
-      name: 'sala',
-      roles: ['ambience'],
+      name: 'oficio',
+      roles: ['master', 'food', 'side'],
       durationSeconds: 3.6,
-      reason: 'A sala de novo',
+      reason: 'Ofício na mesma cena, sem forçar sala',
       join: 'dissolve',
-      motion: 'drift',
+      motion: 'none',
       preferPeak: true,
     },
     {
       name: 'insert',
-      roles: ['food'],
+      roles: ['food', 'master'],
       durationSeconds: 3.2,
-      reason: 'Insert do que se come aqui',
+      reason: 'Close só se a câmera for realmente melhor',
       join: 'fadeblack',
       punchIn: true,
       motion: 'punch',
@@ -439,12 +524,12 @@ export const validatedProgramPresets: Record<EditProgram, ProgramPresetSpec> = {
     },
     {
       name: 'saida',
-      roles: ['ambience', 'master'],
+      roles: ['master', 'food', 'ambience'],
       durationSeconds: 5.4,
-      reason: 'Saída no lugar',
+      reason: 'Saída na câmera que conta a história',
       join: 'fadeblack',
       fadeOut: true,
-      motion: 'drift',
+      motion: 'none',
       preferPeak: true,
     },
   ]),
@@ -577,6 +662,7 @@ export function specToPlaybook(input: ProgramPresetSpec): Playbook {
     minRoles: spec.minRoles,
     beats: spec.beats,
     captions: spec.captions,
+    branding: spec.branding,
   };
 }
 

@@ -192,7 +192,9 @@ export default function AdminProgramStudio({ mode = 'live' }: { mode?: 'live' | 
       const body = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(body.error ?? 'Não foi possível gravar');
       toast.success(
-        kind === 'draft' ? 'Rascunho guardado.' : 'Padrão publicado. Os próximos Reels usam isto.',
+        kind === 'draft'
+          ? 'Rascunho guardado só neste estúdio. Os restaurantes ainda usam o padrão publicado.'
+          : `Padrão publicado. Os próximos Reels de ${editProgramLabels[active]} em todos os restaurantes usam isto.`,
       );
       setPublishOpen(false);
       await reload();
@@ -228,21 +230,16 @@ export default function AdminProgramStudio({ mode = 'live' }: { mode?: 'live' | 
   }
 
   return (
-    <div className="space-y-5">
-      <div className="flex flex-wrap items-end justify-between gap-3">
-        <div className="space-y-2">
-          <div className="flex flex-wrap items-center gap-2">
-            <h1 className="font-heading text-2xl font-semibold">Estúdio dos 4 programas</h1>
-            <Badge variant={status.variant}>{status.label}</Badge>
-          </div>
-          <p className="max-w-2xl text-sm text-muted-foreground">
-            Padrão da fábrica 1080×1920 — player, corte e só o que o FFmpeg queima. Não é o ritmo de
-            um restaurante nem um Premiere genérico.
-          </p>
+    <div className="space-y-3">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex min-w-0 flex-wrap items-center gap-2">
+          <h1 className="font-heading text-xl font-semibold">Estúdio dos 4 programas</h1>
+          <Badge variant={status.variant}>{status.label}</Badge>
         </div>
         <div className="flex flex-wrap gap-2">
           <Button
             variant="outline"
+            size="sm"
             disabled={saving}
             onClick={() => commit(cloneValidatedSpec(active))}
           >
@@ -250,19 +247,29 @@ export default function AdminProgramStudio({ mode = 'live' }: { mode?: 'live' | 
           </Button>
           {mode === 'live' ? (
             <>
-              <Button variant="secondary" disabled={saving} onClick={() => void save('draft')}>
+              <Button
+                variant="secondary"
+                size="sm"
+                disabled={saving}
+                onClick={() => void save('draft')}
+              >
                 Guardar rascunho
               </Button>
               <Button
+                size="sm"
                 disabled={saving || status.kind === 'published'}
                 onClick={() => setPublishOpen(true)}
               >
-                Publicar padrão
+                Publicar para restaurantes
               </Button>
             </>
           ) : null}
         </div>
       </div>
+      <p className="text-xs text-muted-foreground">
+        Rascunho fica só aqui. Publicar vira o padrão da fábrica: os próximos Reels de todos os
+        restaurantes neste programa saem com este corte, estes tempos e estes efeitos.
+      </p>
 
       <Tabs
         value={active}
@@ -281,7 +288,7 @@ export default function AdminProgramStudio({ mode = 'live' }: { mode?: 'live' | 
             </TabsTrigger>
           ))}
         </TabsList>
-        <TabsContent value={active} className="space-y-6 pt-4">
+        <TabsContent value={active} className="space-y-3 pt-3">
           <AdminProgramNle
             spec={spec}
             catalog={catalog}
@@ -299,13 +306,14 @@ export default function AdminProgramStudio({ mode = 'live' }: { mode?: 'live' | 
       <Dialog open={publishOpen} onOpenChange={setPublishOpen}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Publicar {editProgramLabels[active]}?</DialogTitle>
+            <DialogTitle>Publicar {editProgramLabels[active]} para os restaurantes?</DialogTitle>
             <DialogDescription>
-              Os próximos Reels deste programa usam este padrão. Diff contra{' '}
+              Todos os clientes passam a montar os próximos Reels deste programa com este padrão
+              (takes, transições, motion, overlays). Diff contra{' '}
               {payload.published
                 ? `publicado v${payload.published.version}`
                 : 'o validado de fábrica'}
-              .
+              . Entra nos jobs seguintes (o worker refresca em poucos segundos).
             </DialogDescription>
           </DialogHeader>
           {publishDiff.length === 0 ? (
@@ -324,7 +332,7 @@ export default function AdminProgramStudio({ mode = 'live' }: { mode?: 'live' | 
               Cancelar
             </Button>
             <Button type="button" disabled={saving} onClick={() => void save('publish')}>
-              Publicar
+              Publicar para restaurantes
             </Button>
           </DialogFooter>
         </DialogContent>

@@ -24,10 +24,18 @@ export type DirectorInput = {
   clips: ClipCandidate[];
   ids: { tenantId: string; restaurantId: string; momentId: string; reelId: string };
   brand?: RestaurantVideoBrandProfile;
+  cameraRank?: Array<{ cameraPosition: number; cameraRole: string; score: number }>;
+  coherence?: {
+    recommendedMode: string;
+    primaryCameraId: string;
+    compatibleCameraIds: string[];
+    rejected: Array<{ cameraId: string; cameraPosition: number; reason: string }>;
+    multicameraConfidence: number;
+  };
 };
 
 const playbooks: Record<string, string> = {
-  casa: 'CASA constraints: experience, dining room, human warmth, establishing shots, elegant pace. Prefer ambience/master. Few cuts.',
+  casa: 'CASA: premium restaurant reel. Camera role is a weak prior, never a requirement. Hook MUST be the strongest compatible image. If SceneCoherenceGate recommends single_camera, use that camera for the whole reel. Do not reintroduce rejected cameras. Do not cut to another camera just for variety. More scenes on the SAME camera are valid when the picture changes (prep, action, interaction, detail, payoff, exit). If the source is strong, explore windowStartMs→windowEndMs instead of clustering every take in the opening seconds. Weak or repetitive picture may stay short. Do not invent a target duration. Neutral copy only — omit text if unsure. Never invent cuisine, city or ingredients. Full-screen title cards before the first frame are forbidden.',
   oficio: 'OFÍCIO constraints: process, team, kitchen, prep, action. Prefer side/kitchen cameras.',
   assinatura:
     'ASSINATURA constraints: food hero, plating, dish detail. Prefer food camera unless that angle is blocked.',
@@ -88,7 +96,7 @@ export async function decideWithAiDirector(input: DirectorInput): Promise<{
       {
         role: 'system',
         content:
-          'Return only VideoEditDecisionV2 JSON. schemaVersion=2.0 scoreScale=0-100. cameraId and recordingId MUST be copied from candidates (real UUIDs). cameraLabel like C4 is display-only and MUST NOT be used as cameraId or recordingId. sourceStartMs/sourceEndMs are milliseconds relative to the recording, never Unix time. Do not invent UUIDs, prices, discounts, ingredients, awards or dates. Neutral title if unsure. No markdown.',
+          'Return only VideoEditDecisionV2 JSON. schemaVersion=2.0 scoreScale=0-100. cameraId and recordingId MUST be copied from candidates (real UUIDs). cameraLabel like C4 is display-only and MUST NOT be used as cameraId or recordingId. sourceStartMs/sourceEndMs are milliseconds relative to the recording, never Unix time. Do not invent UUIDs, prices, discounts, ingredients, awards or dates. If only one camera is in candidates, that is valid — use it. Neutral title if unsure, or null. No markdown.',
       },
       {
         role: 'user',
@@ -105,6 +113,19 @@ export async function decideWithAiDirector(input: DirectorInput): Promise<{
             windowStartMs: Math.round(item.startOffsetSeconds * 1000),
             windowEndMs: Math.round((item.startOffsetSeconds + item.windowDurationSeconds) * 1000),
           })),
+          sceneCoherence: input.coherence ?? null,
+          singleCameraExploration:
+            input.coherence?.recommendedMode === 'single_camera'
+              ? {
+                  keepSameCamera: true,
+                  exploreAvailableInterval: true,
+                  allowMoreScenesOnSameCamera: true,
+                  lookFor:
+                    'action change, beginning/middle/end, preparation, interaction, payoff, interesting motion, visual variation',
+                  doNotClusterInTheFirstSeconds: true,
+                  noFixedDuration: true,
+                }
+              : null,
           vision: {
             provider: input.plan.provider,
             model: input.plan.model,
@@ -114,6 +135,9 @@ export async function decideWithAiDirector(input: DirectorInput): Promise<{
             cameraRankings: input.plan.cameraRankings,
             bestFrames: input.plan.bestFrames,
             caption: input.plan.caption,
+            multicameraRanker: input.cameraRank ?? null,
+            rejectedCameras: input.coherence?.rejected ?? [],
+            recommendedEditMode: input.coherence?.recommendedMode ?? null,
           },
           legacyDecision: legacy,
           ids: input.ids,
@@ -136,19 +160,31 @@ export async function decideWithAiDirector(input: DirectorInput): Promise<{
   };
   if (!response.ok)
     throw new Error(`DIRECTOR_INVALID_OUTPUT:${payload.error?.message ?? response.status}`);
-  const raw = JSON.parse(payload.choices?.[0]?.message?.content ?? '{}');
-  let decision = parseDecision(
-    raw,
-    input.ids,
-    input.plan.program,
-    decisionFromReelPlan(input.plan, input.ids, input.brand),
-  );
+  const rawContent = payload.choices?.[0]?.message?.content ?? '{}';
+  let raw: unknown;
   try {
-    validateDirectorReferences(decision, candidates);
+    const stripped = rawContent.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/u, '');
+    raw = JSON.parse(stripped);
   } catch {
-    decision = repairDirectorReferences(decision, candidates);
-    validateDirectorReferences(decision, candidates);
+    throw new Error('DIRECTOR_INVALID_OUTPUT:json');
   }
+  let decision: VideoEditDecisionV2;
+  try {
+    decision = parseDecision(
+      raw,
+      input.ids,
+      input.plan.program,
+      decisionFromReelPlan(input.plan, input.ids, input.brand),
+    );
+  } catch (error) {
+    log.warn(
+      { err: error instanceof Error ? error.message : error },
+      'ai director parse failed; keeping valid candidate refs',
+    );
+    decision = legacy;
+  }
+  decision = repairDirectorReferences(decision, candidates);
+  validateDirectorReferences(decision, candidates);
   log.info(
     {
       provider: 'openai',

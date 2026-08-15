@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import type { VideoEditDecisionV1 } from '@reelops/shared';
 import { config } from '../config.js';
 import type { ReelPlan } from '../engine/planner.js';
+import { deliveryAudioEncodeArgs, deliveryAudioFilter } from './audio.js';
 import { renderVertical, run, type RenderResult } from './ffmpeg.js';
 import { casaCompositionLayout } from '../composition/design-system.js';
 import { revideoRenderSettings, patchRevideoNavigationTimeout } from './revideo-settings.js';
@@ -15,6 +16,8 @@ export type CompositionInput = {
   output: string;
   captionsPath?: string | null;
   voicePath?: string | null;
+  logoPath?: string | null;
+  endCard?: boolean;
   workDir: string;
 };
 
@@ -40,8 +43,7 @@ export interface CompositionRenderer {
 }
 
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../revideo');
-const BRANDING_OPEN_S = 1.2;
-const BRANDING_END_S = 1.2;
+const BRANDING_END_S = 0.9;
 
 export class FFmpegCompositionRenderer implements CompositionRenderer {
   readonly kind = 'ffmpeg' as const;
@@ -51,6 +53,7 @@ export class FFmpegCompositionRenderer implements CompositionRenderer {
       input.output,
       input.captionsPath,
       input.voicePath,
+      { logoPath: input.logoPath, endCard: input.endCard },
     );
     return {
       ...result,
@@ -69,7 +72,10 @@ export class RevideoCompositionRenderer implements CompositionRenderer {
     const wall = Date.now();
     const base = path.join(input.workDir, 'ffmpeg-timeline.mp4');
     const ffmpegStarted = Date.now();
-    const timeline = await renderVertical(input.plan, base, input.captionsPath, input.voicePath);
+    const timeline = await renderVertical(input.plan, base, input.captionsPath, input.voicePath, {
+      logoPath: input.logoPath,
+      endCard: input.endCard,
+    });
     const ffmpegTimelineMs = Date.now() - ffmpegStarted;
 
     await bindRevideoFfmpeg();
@@ -87,7 +93,7 @@ export class RevideoCompositionRenderer implements CompositionRenderer {
       '-i',
       'anullsrc=r=48000:cl=stereo',
       '-t',
-      String(BRANDING_OPEN_S + BRANDING_END_S),
+      String(BRANDING_END_S),
       '-ac',
       '2',
       '-ar',
@@ -222,12 +228,10 @@ async function bindRevideoFfmpeg() {
 }
 
 async function muxHybrid(base: string, branding: string, output: string) {
-  const delayMs = Math.round(BRANDING_OPEN_S * 1000);
   const graph = [
-    `[0:v]trim=start=0:end=${BRANDING_OPEN_S},setpts=PTS-STARTPTS,fps=30,scale=1080:1920,setsar=1,format=yuv420p[open]`,
-    `[0:v]trim=start=${BRANDING_OPEN_S}:end=${BRANDING_OPEN_S + BRANDING_END_S},setpts=PTS-STARTPTS,fps=30,scale=1080:1920,setsar=1,format=yuv420p[end]`,
     `[1:v]fps=30,setsar=1,format=yuv420p[mid]`,
-    `[open][mid][end]concat=n=3:v=1:a=0[v]`,
+    `[0:v]trim=start=0:end=${BRANDING_END_S},setpts=PTS-STARTPTS,fps=30,scale=1080:1920,setsar=1,format=yuv420p[end]`,
+    `[mid][end]concat=n=2:v=1:a=0[v]`,
   ].join(';');
   try {
     await run('ffmpeg', [
@@ -240,7 +244,7 @@ async function muxHybrid(base: string, branding: string, output: string) {
       '-i',
       base,
       '-filter_complex',
-      `${graph};[1:a]adelay=${delayMs}|${delayMs},apad=pad_dur=${BRANDING_END_S}[a]`,
+      `${graph};[1:a]${deliveryAudioFilter()},apad=pad_dur=${BRANDING_END_S}[a]`,
       '-map',
       '[v]',
       '-map',
@@ -253,14 +257,7 @@ async function muxHybrid(base: string, branding: string, output: string) {
       '20',
       '-pix_fmt',
       'yuv420p',
-      '-c:a',
-      'aac',
-      '-b:a',
-      '192k',
-      '-ar',
-      '48000',
-      '-ac',
-      '2',
+      ...deliveryAudioEncodeArgs(),
       '-movflags',
       '+faststart',
       output,

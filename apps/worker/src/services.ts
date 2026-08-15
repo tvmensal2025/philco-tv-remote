@@ -21,5 +21,9 @@ export const minio = new Client({
 export const redis = new IORedis(config.REDIS_URL, {
   maxRetriesPerRequest: null,
   connectTimeout: 10_000,
+  enableReadyCheck: true,
+  retryStrategy(times) {
+    return Math.min(times * 200, 2_000);
+  },
 });
 export const log = pino({ level: config.LOG_LEVEL });

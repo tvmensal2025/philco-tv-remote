@@ -159,7 +159,7 @@ export const config = z
         typeof value === 'string'
           ? ['true', '1', 'yes'].includes(value.trim().toLowerCase())
           : value,
-      z.boolean().default(false),
+      z.boolean().default(true),
     ),
     ENABLE_YOLO: z.preprocess(
       (value) =>
@@ -173,14 +173,14 @@ export const config = z
         typeof value === 'string'
           ? ['true', '1', 'yes'].includes(value.trim().toLowerCase())
           : value,
-      z.boolean().default(false),
+      z.boolean().default(true),
     ),
     ENABLE_SMART_REFRAME: z.preprocess(
       (value) =>
         typeof value === 'string'
           ? ['true', '1', 'yes'].includes(value.trim().toLowerCase())
           : value,
-      z.boolean().default(false),
+      z.boolean().default(true),
     ),
     ENABLE_BEAT_EDITING: z.preprocess(
       (value) =>
@@ -196,12 +196,8 @@ export const config = z
           : value,
       z.boolean().default(false),
     ),
-    STALE_JOB_MS: z.coerce
-      .number()
-      .int()
-      .min(60_000)
-      .max(3_600_000)
-      .default(10 * 60 * 1000),
+    STALE_JOB_MS: z.coerce.number().int().min(60_000).max(3_600_000).default(120_000),
+    WORKER_HEARTBEAT_STALE_MS: z.coerce.number().int().min(30_000).max(600_000).default(90_000),
     MAX_JOB_RECOVERIES: z.coerce.number().int().min(0).max(5).default(2),
     REVIDEO_FORCE_FAIL: z.preprocess(
       (value) =>
@@ -278,5 +274,16 @@ export const config = z
       z.string().min(8).optional(),
     ),
     YOLO_TIMEOUT_MS: z.coerce.number().int().min(3000).max(60_000).default(15_000),
+    YOLO_MAX_CONCURRENCY: z.coerce.number().int().min(1).max(8).default(1),
+    VISION_MAX_CONCURRENCY: z.coerce.number().int().min(1).max(8).default(2),
+    FFMPEG_MAX_PROCESSES: z.coerce.number().int().min(1).max(8).default(2),
+    STORAGE_QUOTA_BYTES_PER_TENANT: z.coerce.number().int().min(0).default(0),
+    MAX_ACTIVE_JOBS_PER_TENANT: z.coerce.number().int().min(1).max(32).default(4),
+    MAX_RENDER_JOBS_PER_TENANT: z.coerce.number().int().min(1).max(8).default(1),
+    TENANT_FAIRNESS_DELAY_MS: z.coerce.number().int().min(1000).max(60_000).default(8_000),
+    WORKER_ENVIRONMENT: z.string().optional(),
+    WORKER_DEPLOYMENT: z.string().default('easypanel'),
+    WORKER_VERSION: z.string().default('0.1.0'),
+    WORKER_NODE_TTL_HOURS: z.coerce.number().int().min(1).max(168).default(24),
   })
   .parse(process.env);

@@ -66,6 +66,7 @@ test('migrations are ordered and the hardening migration is present', () => {
     '0013_recording_timestamp_idempotency.sql',
     '0014_moment_client_request_id.sql',
     '0015_platform_admin.sql',
+    '0016_scale_indexes.sql',
   ]);
 });
 

@@ -7,8 +7,9 @@ NVR grava MP4 em pastas             Next.js apps/web                   Supabase 
 CenaPronta Uploader                 /api/ingest/presign|complete       Gemini / OpenAI (frames JPEG)
   watch: lê, não move               /api/moments                       Meta Graph (opcional)
   outbox: pode arquivar             BullMQ + Redis                     WAME WhatsApp (opcional)
-  SQLite uploaded_files             Worker FFmpeg
+  SQLite uploaded_files             Worker FFmpeg + YOLO HTTP
   TimestampResolver                 MinIO bucket cenapronta
+                                    worker_nodes identity/capabilities
 ```
 
 ## Pastas MinIO (canônico atual — não quebrar ingestão)

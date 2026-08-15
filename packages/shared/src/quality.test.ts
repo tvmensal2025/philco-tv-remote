@@ -12,6 +12,9 @@ describe('crop and safe area', () => {
     expect(fit.mode).toBe('crop');
     expect(fit.filter.startsWith('crop=')).toBe(true);
     expect(fit.filter).toContain('scale=1080:1920');
+    const match = fit.filter.match(/^crop=(\d+):(\d+):(\d+):(\d+)/);
+    expect(match).not.toBeNull();
+    expect(match!.slice(1).every((value) => Number(value) % 2 === 0)).toBe(true);
   });
 
   it('rejects a title sitting in the TikTok chrome', () => {
@@ -46,11 +49,27 @@ describe('quality gates', () => {
         sizeBytes: 400_000,
         durationSeconds: 12,
         video: { codec: 'h264', width: 1080, height: 1920, pixFmt: 'yuv420p', fps: 30 },
-        audio: { codec: 'aac', sampleRate: 48000, channels: 2 },
+        audio: { codec: 'aac', sampleRate: 48000, channels: 2, channelLayout: 'stereo' },
       },
       { videoCodec: 'h264', pixFmt: 'yuv420p' },
     );
     expect(report.status).toBe('passed');
+  });
+
+  it('rejects delivery audio that is not AAC 48 kHz stereo', () => {
+    const report = evaluateTechnicalQuality(
+      {
+        sizeBytes: 400_000,
+        durationSeconds: 12,
+        video: { codec: 'h264', width: 1080, height: 1920, pixFmt: 'yuv420p', fps: 30 },
+        audio: { codec: 'aac', sampleRate: 96000, channels: 1, channelLayout: 'mono' },
+      },
+      { videoCodec: 'h264', pixFmt: 'yuv420p', requireAudio: true },
+    );
+    expect(report.status).toBe('failed');
+    expect(report.issues.map((issue) => issue.code)).toEqual(
+      expect.arrayContaining(['AUDIO_RATE', 'AUDIO_CHANNELS', 'AUDIO_LAYOUT']),
+    );
   });
 
   it('detects title overflow and missing logo', () => {
@@ -69,7 +88,8 @@ describe('quality gates', () => {
 
 describe('failure classification', () => {
   it('retries transient infra and not schema bugs', () => {
-    expect(classifyJobFailure('REDIS ECONNREFUSED')).toBe('TRANSIENT');
+    expect(classifyJobFailure('YOLO_TIMEOUT')).toBe('TRANSIENT');
+    expect(classifyJobFailure('VISION_CIRCUIT_OPEN')).toBe('TRANSIENT');
     expect(shouldRetryJob(classifyJobFailure('REDIS ECONNREFUSED'))).toBe(true);
     expect(classifyJobFailure('TECHNICAL_QC:EMPTY_FILE')).toBe('QUALITY_FAILURE');
     expect(shouldRetryJob(classifyJobFailure('TECHNICAL_QC:EMPTY_FILE'))).toBe(false);

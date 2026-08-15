@@ -1,7 +1,14 @@
-import type { JoinOverlayKind, PlaybookBeat, ProgramPresetSpec } from './program-preset.js';
+import type {
+  JoinOverlayKind,
+  PlaybookBeat,
+  ProgramBranding,
+  ProgramPresetSpec,
+} from './program-preset.js';
 import {
   JOIN_DEFAULT_SECONDS,
   JOIN_OVERLAY,
+  brandingLayerLabels,
+  emptyProgramBranding,
   joinLabels,
   joinOverlayLabels,
   motionLabels,
@@ -21,7 +28,51 @@ export const FACTORY_LIMITS = {
   punchInScale: 1240 / 1080,
   audioFadeInSeconds: 0.55,
   audioFadeOutSeconds: 0.8,
+  frameWidth: 1080,
+  frameHeight: 1920,
 } as const;
+
+export const FACTORY_BRANDING = {
+  logo: { x: 90, y: 250, size: 72 },
+  title: { y: 360, fontSize: 72, start: 1.6, duration: 2.2 },
+  lowerThird: { x: 90, bottom: 360, fontSize: 40, start: 1.2, duration: 6.5 },
+  cta: { bottom: 280, fontSize: 48, tail: 4 },
+  endCard: { duration: 1.55, fontSize: 70 },
+  wordmarkFontSize: 28,
+} as const;
+
+export type BrandingPreview = {
+  title: boolean;
+  logo: boolean;
+  lowerThird: boolean;
+  cta: boolean;
+  endCard: boolean;
+};
+
+export function brandingPreviewAt(
+  branding: ProgramBranding,
+  time: number,
+  duration: number,
+): BrandingPreview {
+  const t = Math.max(0, Math.min(duration, time));
+  const endStart = Math.max(0, duration - FACTORY_BRANDING.endCard.duration);
+  const onEnd = branding.endCard && t >= endStart;
+  return {
+    title:
+      branding.title &&
+      !onEnd &&
+      t >= FACTORY_BRANDING.title.start &&
+      t < FACTORY_BRANDING.title.start + FACTORY_BRANDING.title.duration,
+    logo: branding.logo && t <= duration,
+    lowerThird:
+      branding.lowerThird &&
+      !onEnd &&
+      t >= FACTORY_BRANDING.lowerThird.start &&
+      t < FACTORY_BRANDING.lowerThird.start + FACTORY_BRANDING.lowerThird.duration,
+    cta: branding.cta && !onEnd && t >= Math.max(0, duration - FACTORY_BRANDING.cta.tail),
+    endCard: onEnd,
+  };
+}
 
 export type TimelineClip = {
   index: number;
@@ -49,6 +100,7 @@ export type PreviewFrame = {
   fadeBlack: number;
   programFade: number;
   captionVisible: boolean;
+  branding: BrandingPreview;
   inOverlap: boolean;
   joinOverlay: { name: JoinOverlayKind; opacity: number } | null;
 };
@@ -235,6 +287,7 @@ export function previewAtTime(spec: ProgramPresetSpec, time: number): PreviewFra
     fadeBlack: fadeBlack * (1 - fadeOut),
     programFade: fadeOut,
     captionVisible: spec.captions.strategy === 'full' && t < FACTORY_LIMITS.captionSeconds,
+    branding: brandingPreviewAt(spec.branding ?? emptyProgramBranding, t, duration),
     inOverlap,
     joinOverlay: overlayHit
       ? { name: overlayHit.name, opacity: overlayOpacityAt(overlayHit, t) }
@@ -377,12 +430,39 @@ export function formatTimecode(seconds: number) {
   return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}.${String(cs).padStart(2, '0')}`;
 }
 
+export function clampBeatDuration(seconds: number) {
+  const value = Number.isFinite(seconds) ? seconds : FACTORY_LIMITS.minBeatSeconds;
+  return Number(
+    Math.min(FACTORY_LIMITS.maxBeatSeconds, Math.max(FACTORY_LIMITS.minBeatSeconds, value)).toFixed(
+      2,
+    ),
+  );
+}
+
+export function snapTime(spec: ProgramPresetSpec, time: number, threshold = 0.1) {
+  const { clips, duration } = buildProgramTimeline(spec);
+  const points = [0, duration];
+  for (const clip of clips) {
+    points.push(clip.start, clip.end);
+  }
+  let best = Math.max(0, Math.min(duration, time));
+  let dist = threshold;
+  for (const point of points) {
+    const delta = Math.abs(point - time);
+    if (delta < dist) {
+      best = point;
+      dist = delta;
+    }
+  }
+  return best;
+}
+
 export function specsEqual(a: ProgramPresetSpec, b: ProgramPresetSpec) {
   return JSON.stringify(a) === JSON.stringify(b);
 }
 
 export type ProgramSpecDiffLine = {
-  kind: 'takes' | 'duration' | 'join' | 'captions' | 'target' | 'beat';
+  kind: 'takes' | 'duration' | 'join' | 'captions' | 'branding' | 'target' | 'beat';
   label: string;
 };
 
@@ -420,6 +500,17 @@ export function diffProgramSpecs(
           : 'Legendas ligadas → desligadas',
     });
   }
+  (Object.keys(brandingLayerLabels) as (keyof ProgramBranding)[]).forEach((key) => {
+    const previous = (from.branding ?? emptyProgramBranding)[key];
+    const next = (to.branding ?? emptyProgramBranding)[key];
+    if (previous === next) return;
+    lines.push({
+      kind: 'branding',
+      label: next
+        ? `${brandingLayerLabels[key]} desligado → ligado`
+        : `${brandingLayerLabels[key]} ligado → desligado`,
+    });
+  });
   const max = Math.max(from.beats.length, to.beats.length);
   for (let index = 0; index < max; index += 1) {
     const previous = from.beats[index];

@@ -17,8 +17,16 @@ export type MediaProbe = {
     codec?: string;
     sampleRate?: number;
     channels?: number;
+    channelLayout?: string;
   } | null;
 };
+
+export const DELIVERY_AUDIO = {
+  codec: 'aac',
+  sampleRate: 48000,
+  channels: 2,
+  channelLayout: 'stereo',
+} as const;
 
 export type QualityIssue = { code: string; message: string };
 
@@ -82,6 +90,26 @@ export function evaluateTechnicalQuality(
   }
   if (requirements.requireAudio && !probe.audio?.codec)
     issues.push({ code: 'NO_AUDIO', message: 'áudio esperado ausente' });
+  if (probe.audio) {
+    if ((probe.audio.codec ?? '') !== DELIVERY_AUDIO.codec) {
+      issues.push({ code: 'AUDIO_CODEC', message: String(probe.audio.codec ?? 'missing') });
+    }
+    if (probe.audio.sampleRate !== DELIVERY_AUDIO.sampleRate) {
+      issues.push({
+        code: 'AUDIO_RATE',
+        message: String(probe.audio.sampleRate ?? 'missing'),
+      });
+    }
+    if (probe.audio.channels !== DELIVERY_AUDIO.channels) {
+      issues.push({
+        code: 'AUDIO_CHANNELS',
+        message: String(probe.audio.channels ?? 'missing'),
+      });
+    }
+    if (probe.audio.channelLayout && !/^(stereo|2\.0)$/i.test(probe.audio.channelLayout)) {
+      issues.push({ code: 'AUDIO_LAYOUT', message: probe.audio.channelLayout });
+    }
+  }
   return { status: issues.length ? 'failed' : 'passed', issues, probe };
 }
 

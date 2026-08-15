@@ -1,11 +1,13 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
   ChevronLeft,
   ChevronRight,
   Copy,
   FilePlus2,
+  Minus,
+  Plus,
   Pause,
   Play,
   Repeat,
@@ -24,6 +26,8 @@ import {
   clipAtTime,
   duplicateBeatAt,
   emptyBeat,
+  emptyProgramBranding,
+  FACTORY_BRANDING,
   FACTORY_LIMITS,
   formatTimecode,
   JOIN_DEFAULT_SECONDS,
@@ -36,11 +40,15 @@ import {
   motionLabels,
   moveBeat,
   previewAtTime,
+  programBrandCopy,
   programCapacity,
   splitSpecAtPlayhead,
+  snapTime,
+  clampBeatDuration,
   type CameraRole,
   type CatalogEffect,
   type JoinName,
+  type JoinOverlayKind,
   type JoinOverlayName,
   type MotionName,
   type PlaybookBeat,
@@ -60,6 +68,7 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { Switch } from '@/components/ui/switch';
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { cn } from '@/lib/utils';
 
 export type SpecHistoryMode = 'push' | 'coalesce';
@@ -178,6 +187,7 @@ function ScenePlate(props: {
       style={{
         opacity: props.layer.opacity,
         transform: `scale(${props.layer.scale})`,
+        filter: 'contrast(1.08) brightness(1.028) saturate(1.14)',
         willChange: 'opacity, transform',
       }}
     >
@@ -222,13 +232,43 @@ function ScenePlate(props: {
         <div className="absolute bottom-[18%] left-[8%] right-[8%] h-10 rounded-sm bg-amber-950/50 ring-1 ring-amber-200/20" />
       ) : null}
       {props.chrome !== false && props.layer.opacity > 0.65 ? (
-        <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/70 to-transparent px-3 pb-4 pt-10">
-          <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-white/70">{label}</p>
-          <p className="font-heading text-lg font-semibold text-white">{props.layer.beat.name}</p>
-          <p className="truncate text-[11px] text-white/75">
+        <div className="absolute inset-x-0 top-28 px-12">
+          <p
+            className="font-bold uppercase tracking-[0.18em] text-white/70"
+            style={{ fontSize: 28 }}
+          >
+            {label}
+          </p>
+          <p className="font-heading font-semibold text-white" style={{ fontSize: 56 }}>
+            {props.layer.beat.name}
+          </p>
+          <p className="truncate text-white/75" style={{ fontSize: 32 }}>
             {props.source?.name ?? props.layer.beat.reason}
           </p>
         </div>
+      ) : null}
+      <div
+        className="pointer-events-none absolute inset-0 mix-blend-soft-light"
+        style={{
+          background:
+            'linear-gradient(180deg, rgba(255,176,80,0.16) 0%, transparent 38%, rgba(18,36,72,0.2) 100%)',
+        }}
+      />
+    </div>
+  );
+}
+
+function JoinFxPlate(props: { name: JoinOverlayKind; opacity: number }) {
+  return (
+    <div
+      className="pointer-events-none absolute inset-0 mix-blend-screen"
+      style={{ opacity: props.opacity, background: JOIN_OVERLAY[props.name].preview }}
+    >
+      {props.name === 'leak' ? (
+        <div className="absolute -left-[20%] -top-[18%] h-[70%] w-[75%] rounded-full bg-[#ffb060]/40 blur-2xl" />
+      ) : null}
+      {props.name === 'burn' ? (
+        <div className="absolute inset-x-0 top-0 h-1/4 bg-gradient-to-b from-amber-100/70 to-transparent" />
       ) : null}
     </div>
   );
@@ -273,7 +313,13 @@ function effectIsActive(effect: CatalogEffect, beat: PlaybookBeat, spec: Program
     (effect.id === 'prefer-peak' && beat.preferPeak !== false) ||
     (effect.id === 'captions-full' && spec.captions.strategy === 'full') ||
     (effect.id === 'captions-none' && spec.captions.strategy === 'none') ||
-    (effect.apply?.joinOverlay && (beat.joinOverlay ?? 'none') === effect.apply.joinOverlay),
+    (effect.apply?.joinOverlay && (beat.joinOverlay ?? 'none') === effect.apply.joinOverlay) ||
+    (effect.applyBranding &&
+      Object.entries(effect.applyBranding).every(
+        ([key, value]) =>
+          (spec.branding ?? emptyProgramBranding)[key as keyof typeof emptyProgramBranding] ===
+          value,
+      )),
   );
 }
 
@@ -306,6 +352,78 @@ function seekFromEvent(el: HTMLElement, clientX: number, duration: number) {
   return Math.max(0, Math.min(duration, ratio * duration));
 }
 
+function PlayheadMark(props: { pct: number }) {
+  return (
+    <div className="pointer-events-none absolute inset-y-0 z-20" style={{ left: `${props.pct}%` }}>
+      <div className="-ml-[5px] h-0 w-0 border-x-[5px] border-t-[7px] border-x-transparent border-t-red-500" />
+      <div className="ml-px h-full w-px bg-red-500" />
+    </div>
+  );
+}
+
+function ReelsStage(props: {
+  dropOver: boolean;
+  children: React.ReactNode;
+  onDragOver: (event: React.DragEvent<HTMLDivElement>) => void;
+  onDragLeave: () => void;
+  onDrop: (event: React.DragEvent<HTMLDivElement>) => void;
+}) {
+  const hostRef = useRef<HTMLDivElement>(null);
+  const [scale, setScale] = useState(0.25);
+
+  useLayoutEffect(() => {
+    const host = hostRef.current;
+    if (!host) return;
+    const fit = () => {
+      const rect = host.getBoundingClientRect();
+      setScale(
+        Math.max(
+          0.08,
+          Math.min(
+            rect.width / FACTORY_LIMITS.frameWidth,
+            rect.height / FACTORY_LIMITS.frameHeight,
+          ),
+        ),
+      );
+    };
+    fit();
+    const observer = new ResizeObserver(fit);
+    observer.observe(host);
+    return () => observer.disconnect();
+  }, []);
+
+  const width = FACTORY_LIMITS.frameWidth * scale;
+  const height = FACTORY_LIMITS.frameHeight * scale;
+
+  return (
+    <div ref={hostRef} className="flex h-[min(70vh,820px)] w-full items-center justify-center">
+      <div
+        role="img"
+        aria-label="Monitor Reels 1080 por 1920"
+        className={cn(
+          'relative overflow-hidden rounded-2xl border bg-black shadow-card',
+          props.dropOver && 'ring-2 ring-primary',
+        )}
+        style={{ width, height }}
+        onDragOver={props.onDragOver}
+        onDragLeave={props.onDragLeave}
+        onDrop={props.onDrop}
+      >
+        <div
+          className="absolute left-0 top-0 origin-top-left overflow-hidden"
+          style={{
+            width: FACTORY_LIMITS.frameWidth,
+            height: FACTORY_LIMITS.frameHeight,
+            transform: `scale(${scale})`,
+          }}
+        >
+          {props.children}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function AdminProgramNle(props: {
   spec: ProgramPresetSpec;
   catalog: CatalogEffect[];
@@ -324,9 +442,23 @@ export default function AdminProgramNle(props: {
   const [loop, setLoop] = useState(true);
   const [sources, setSources] = useState<Record<number, TakeSource>>({});
   const [dropOver, setDropOver] = useState(false);
+  const [zoom, setZoom] = useState(1);
   const timelineRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const dragging = useRef(false);
+  const dragRef = useRef<
+    | { kind: 'scrub' }
+    | {
+        kind: 'trim';
+        index: number;
+        edge: 'left' | 'right';
+        startX: number;
+        startDuration: number;
+        startPrev?: number;
+        startOffset: number;
+      }
+    | { kind: 'reorder'; index: number; startX: number }
+    | null
+  >(null);
   const timeRef = useRef(0);
   const specRef = useRef(spec);
   const selectedRef = useRef(selected);
@@ -343,6 +475,10 @@ export default function AdminProgramNle(props: {
   );
   const overlayHits = useMemo(() => joinOverlayHits(spec), [spec]);
   const frame = useMemo(() => previewAtTime(spec, time), [spec, time]);
+  const brandCopy = useMemo(
+    () => programBrandCopy({ restaurantName: 'Nome do restaurante', program: spec.program }),
+    [spec.program],
+  );
   const canCut = canSplitAt(spec, time);
 
   const clampTime = useCallback(
@@ -400,9 +536,10 @@ export default function AdminProgramNle(props: {
   }, [playing, time, clips, selected, onSelect]);
 
   const seek = useCallback(
-    (value: number, pause = true) => {
+    (value: number, pause = true, snap = false) => {
       if (pause) setPlaying(false);
-      const next = clampTime(value);
+      const raw = clampTime(value);
+      const next = snap ? snapTime(specRef.current, raw, 0.12) : raw;
       setTime(next);
       const clip = clipAtTime(clips, next);
       if (clip) onSelect(clip.index);
@@ -440,6 +577,51 @@ export default function AdminProgramNle(props: {
   const applyEffect = useCallback(
     (effect: CatalogEffect) => {
       if (effect.status !== 'real') return;
+      const active = effectIsActive(effect, beat, spec);
+      if (effect.applyBranding) {
+        const next = { ...emptyProgramBranding, ...spec.branding };
+        for (const [key, value] of Object.entries(effect.applyBranding)) {
+          const field = key as keyof typeof next;
+          next[field] = active ? false : Boolean(value);
+        }
+        onChange({ ...spec, branding: next });
+        return;
+      }
+      if (active) {
+        if (effect.id === 'captions-full') {
+          onChange({ ...spec, captions: { strategy: 'none' } });
+          return;
+        }
+        if (effect.id === 'captions-none') {
+          onChange({ ...spec, captions: { strategy: 'full' } });
+          return;
+        }
+        if (effect.id === 'fade-in') {
+          patchBeat({ fadeIn: false });
+          return;
+        }
+        if (effect.id === 'fade-out') {
+          patchBeat({ fadeOut: false });
+          return;
+        }
+        if (effect.id === 'punch-in') {
+          patchBeat({ punchIn: false });
+          return;
+        }
+        if (effect.id === 'prefer-peak') {
+          patchBeat({ preferPeak: false });
+          return;
+        }
+        if (effect.id === 'punch' || effect.id === 'drift') {
+          patchBeat({ motion: 'none', punchIn: effect.id === 'punch' ? false : beat.punchIn });
+          return;
+        }
+        if (effect.apply?.joinOverlay && effect.apply.joinOverlay !== 'none') {
+          patchBeat({ joinOverlay: 'none' });
+          return;
+        }
+        return;
+      }
       if (effect.id === 'captions-full') {
         onChange({ ...spec, captions: { strategy: 'full' } });
         return;
@@ -450,7 +632,7 @@ export default function AdminProgramNle(props: {
       }
       if (effect.apply) patchBeat(effect.apply);
     },
-    [patchBeat, onChange, spec],
+    [beat, patchBeat, onChange, spec],
   );
 
   const remapSources = useCallback(
@@ -600,7 +782,12 @@ export default function AdminProgramNle(props: {
       } else if (event.key === 'k' || event.key === 'K') {
         event.preventDefault();
         setPlaying(false);
-        setTime(0);
+      } else if (event.key === '-' || event.key === '_') {
+        event.preventDefault();
+        setZoom((value) => Math.max(1, Number((value - 0.5).toFixed(1))));
+      } else if (event.key === '=' || event.key === '+') {
+        event.preventDefault();
+        setZoom((value) => Math.min(4, Number((value + 0.5).toFixed(1))));
       }
     }
     window.addEventListener('keydown', onKey);
@@ -624,20 +811,127 @@ export default function AdminProgramNle(props: {
 
   const playheadPct = duration > 0 ? (time / duration) * 100 : 0;
 
+  function secondsPerPixel() {
+    const width = timelineRef.current?.getBoundingClientRect().width ?? 1;
+    return duration / Math.max(1, width);
+  }
+
   function onTimelinePointer(event: React.PointerEvent<HTMLDivElement>) {
-    if (!timelineRef.current) return;
-    dragging.current = true;
+    if (!timelineRef.current || dragRef.current) return;
+    dragRef.current = { kind: 'scrub' };
     timelineRef.current.setPointerCapture(event.pointerId);
-    seek(seekFromEvent(timelineRef.current, event.clientX, duration));
+    seek(seekFromEvent(timelineRef.current, event.clientX, duration), true, true);
   }
 
   function onTimelineMove(event: React.PointerEvent<HTMLDivElement>) {
-    if (!dragging.current || !timelineRef.current) return;
-    seek(seekFromEvent(timelineRef.current, event.clientX, duration));
+    const drag = dragRef.current;
+    if (!drag || !timelineRef.current) return;
+    if (drag.kind === 'scrub') {
+      seek(seekFromEvent(timelineRef.current, event.clientX, duration), true, true);
+      return;
+    }
+    const delta = (event.clientX - drag.startX) * secondsPerPixel();
+    const current = specRef.current;
+    if (drag.kind === 'trim') {
+      if (drag.edge === 'right') {
+        const next = clampBeatDuration(drag.startDuration + delta);
+        onChange(
+          {
+            ...current,
+            beats: current.beats.map((item, index) =>
+              index === drag.index ? { ...item, durationSeconds: next } : item,
+            ),
+          },
+          { history: 'coalesce' },
+        );
+        return;
+      }
+      if (drag.index > 0) {
+        const next = clampBeatDuration((drag.startPrev ?? FACTORY_LIMITS.minBeatSeconds) + delta);
+        onChange(
+          {
+            ...current,
+            beats: current.beats.map((item, index) =>
+              index === drag.index - 1 ? { ...item, durationSeconds: next } : item,
+            ),
+          },
+          { history: 'coalesce' },
+        );
+        return;
+      }
+      const offsetSeconds = Math.max(0, drag.startOffset + delta);
+      setSources((sources) =>
+        sources[0] ? { ...sources, 0: { ...sources[0]!, offsetSeconds } } : sources,
+      );
+      onChange(
+        {
+          ...current,
+          beats: current.beats.map((item, index) =>
+            index === 0
+              ? { ...item, durationSeconds: clampBeatDuration(drag.startDuration - delta) }
+              : item,
+          ),
+        },
+        { history: 'coalesce' },
+      );
+    }
   }
 
-  function onTimelineUp() {
-    dragging.current = false;
+  function onTimelineUp(event: React.PointerEvent<HTMLDivElement>) {
+    const drag = dragRef.current;
+    dragRef.current = null;
+    if (!drag || drag.kind !== 'reorder' || !timelineRef.current) return;
+    const width = timelineRef.current.getBoundingClientRect().width;
+    const clip = clips[drag.index];
+    if (!clip) return;
+    const clipW = duration > 0 ? (clip.duration / duration) * width : width;
+    const steps = Math.round((event.clientX - drag.startX) / Math.max(28, clipW));
+    if (!steps) return;
+    const dir = steps > 0 ? 1 : -1;
+    let index = drag.index;
+    let current = specRef.current;
+    for (let step = 0; step < Math.abs(steps); step += 1) {
+      const nextIndex = index + dir;
+      if (nextIndex < 0 || nextIndex >= current.beats.length) break;
+      remapSources((sources) => {
+        const next = { ...sources };
+        const left = next[index];
+        const right = next[nextIndex];
+        if (right) next[index] = right;
+        else delete next[index];
+        if (left) next[nextIndex] = left;
+        else delete next[nextIndex];
+        return next;
+      });
+      current = moveBeat(current, index, dir);
+      index = nextIndex;
+    }
+    if (index !== drag.index) {
+      onChange(current);
+      onSelect(index);
+    }
+  }
+
+  function beginClipDrag(event: React.PointerEvent, index: number, edge?: 'left' | 'right') {
+    event.stopPropagation();
+    event.preventDefault();
+    timelineRef.current?.setPointerCapture(event.pointerId);
+    const item = spec.beats[index];
+    if (!item) return;
+    if (edge) {
+      dragRef.current = {
+        kind: 'trim',
+        index,
+        edge,
+        startX: event.clientX,
+        startDuration: item.durationSeconds,
+        startPrev: spec.beats[index - 1]?.durationSeconds,
+        startOffset: sources[index]?.offsetSeconds ?? 0,
+      };
+      return;
+    }
+    dragRef.current = { kind: 'reorder', index, startX: event.clientX };
+    onSelect(index);
   }
 
   return (
@@ -659,7 +953,9 @@ export default function AdminProgramNle(props: {
           <p className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
             Efeitos da fábrica
           </p>
-          <p className="text-[11px] text-muted-foreground">Só o que o FFmpeg queima no 1080×1920</p>
+          <p className="text-[11px] text-muted-foreground">
+            Só o que o FFmpeg queima no 1080×1920. Nome e PNG vêm de cada restaurante.
+          </p>
         </div>
         <div className="flex flex-wrap items-start gap-x-4 gap-y-2">
           {groups.real.map(([group, effects]) => (
@@ -670,18 +966,24 @@ export default function AdminProgramNle(props: {
               {effects.map((effect) => {
                 const active = effectIsActive(effect, beat, spec);
                 return (
-                  <button
-                    key={effect.id}
-                    type="button"
-                    title={effect.hint}
-                    onClick={() => applyEffect(effect)}
-                    className={cn(
-                      'rounded-md border px-2 py-0.5 text-xs hover:bg-accent',
-                      active && 'border-primary bg-primary/10',
-                    )}
-                  >
-                    {effect.label}
-                  </button>
+                  <Tooltip key={effect.id}>
+                    <TooltipTrigger asChild>
+                      <button
+                        type="button"
+                        onClick={() => applyEffect(effect)}
+                        className={cn(
+                          'rounded-md border px-2 py-0.5 text-xs hover:bg-accent',
+                          active && 'border-primary bg-primary/10 font-medium',
+                        )}
+                      >
+                        {effect.label}
+                      </button>
+                    </TooltipTrigger>
+                    <TooltipContent side="bottom" className="max-w-xs">
+                      {effect.hint}
+                      {active ? ' · clique outra vez para tirar' : ''}
+                    </TooltipContent>
+                  </Tooltip>
                 );
               })}
             </div>
@@ -712,11 +1014,8 @@ export default function AdminProgramNle(props: {
 
       <div className="grid items-start gap-4 xl:grid-cols-[minmax(0,1fr)_320px]">
         <div className="flex min-w-0 flex-col items-center gap-2">
-          <div
-            className={cn(
-              'relative aspect-[9/16] w-full max-h-[min(42vh,420px)] max-w-[260px] overflow-hidden rounded-2xl border bg-black shadow-card',
-              dropOver && 'ring-2 ring-primary',
-            )}
+          <ReelsStage
+            dropOver={dropOver}
             onDragOver={(event) => {
               event.preventDefault();
               setDropOver(true);
@@ -761,13 +1060,7 @@ export default function AdminProgramNle(props: {
                   <div className="absolute inset-0 bg-black" style={{ opacity: frame.fadeBlack }} />
                 ) : null}
                 {frame.joinOverlay && frame.joinOverlay.opacity > 0 ? (
-                  <div
-                    className="pointer-events-none absolute inset-0 mix-blend-screen"
-                    style={{
-                      opacity: frame.joinOverlay.opacity,
-                      background: JOIN_OVERLAY[frame.joinOverlay.name].preview,
-                    }}
-                  />
+                  <JoinFxPlate name={frame.joinOverlay.name} opacity={frame.joinOverlay.opacity} />
                 ) : null}
                 {frame.programFade > 0 ? (
                   <div
@@ -776,37 +1069,137 @@ export default function AdminProgramNle(props: {
                   />
                 ) : null}
                 {frame.captionVisible ? (
-                  <div className="absolute inset-x-4 top-[18%] rounded-md bg-black/55 px-2 py-1 text-center text-[11px] font-medium text-white">
+                  <div
+                    className="pointer-events-none absolute text-center font-bold text-white"
+                    style={{
+                      left: 70,
+                      right: 70,
+                      bottom: 140,
+                      fontSize: 64,
+                      lineHeight: 1.15,
+                      textShadow: '0 2px 0 #000, 0 0 8px #000',
+                    }}
+                  >
                     Legenda do turno · queima 8s no ASS
                   </div>
                 ) : null}
-                <div className="absolute left-2 top-2 rounded bg-black/60 px-1.5 py-0.5 font-mono text-[10px] text-white">
+                {frame.branding.endCard ? (
+                  <div className="pointer-events-none absolute inset-0 bg-black/70" />
+                ) : null}
+                {frame.branding.logo ? (
+                  <div
+                    className="pointer-events-none absolute flex items-center justify-center rounded-lg border border-white/40 bg-black/45 font-bold tracking-wide text-white"
+                    style={{
+                      left: FACTORY_BRANDING.logo.x,
+                      top: FACTORY_BRANDING.logo.y,
+                      width: FACTORY_BRANDING.logo.size,
+                      height: FACTORY_BRANDING.logo.size,
+                      fontSize: FACTORY_BRANDING.wordmarkFontSize,
+                    }}
+                  >
+                    {brandCopy.wordmark}
+                  </div>
+                ) : null}
+                {frame.branding.title ? (
+                  <div
+                    className="pointer-events-none absolute text-center font-bold text-white"
+                    style={{
+                      left: 90,
+                      right: 90,
+                      top: FACTORY_BRANDING.title.y,
+                      fontSize: FACTORY_BRANDING.title.fontSize,
+                      lineHeight: 1.1,
+                      textShadow: '0 3px 0 #000, 0 0 18px #000',
+                    }}
+                  >
+                    {brandCopy.title}
+                  </div>
+                ) : null}
+                {frame.branding.lowerThird ? (
+                  <div
+                    className="pointer-events-none absolute rounded-sm bg-black/70 px-5 py-3 font-semibold text-white"
+                    style={{
+                      left: FACTORY_BRANDING.lowerThird.x,
+                      bottom: FACTORY_BRANDING.lowerThird.bottom,
+                      fontSize: FACTORY_BRANDING.lowerThird.fontSize,
+                    }}
+                  >
+                    {brandCopy.lowerThird}
+                  </div>
+                ) : null}
+                {frame.branding.cta ? (
+                  <div
+                    className="pointer-events-none absolute text-center font-bold text-white"
+                    style={{
+                      left: 90,
+                      right: 90,
+                      bottom: FACTORY_BRANDING.cta.bottom,
+                      fontSize: FACTORY_BRANDING.cta.fontSize,
+                      textShadow: '0 2px 0 #000',
+                    }}
+                  >
+                    {brandCopy.cta}
+                  </div>
+                ) : null}
+                {frame.branding.endCard ? (
+                  <div
+                    className="pointer-events-none absolute inset-x-16 text-center font-bold text-white"
+                    style={{
+                      top: 860,
+                      fontSize: FACTORY_BRANDING.endCard.fontSize,
+                      textShadow: '0 3px 0 #000',
+                    }}
+                  >
+                    {brandCopy.endCard}
+                  </div>
+                ) : null}
+                <div
+                  className="pointer-events-none absolute inset-0 opacity-[0.12] mix-blend-overlay"
+                  style={{
+                    backgroundImage:
+                      'repeating-radial-gradient(circle at 18% 22%, rgba(255,255,255,0.4) 0 0.55px, transparent 0.7px 2.3px)',
+                  }}
+                />
+                <div className="pointer-events-none absolute inset-[54px] border border-white/20" />
+                <div className="pointer-events-none absolute inset-[108px] border border-white/10" />
+                <div
+                  className="absolute left-8 top-8 rounded bg-black/60 px-4 py-2 font-mono text-white"
+                  style={{ fontSize: 28 }}
+                >
                   {formatTimecode(time)}
                 </div>
-                <div className="absolute right-2 top-2 rounded bg-black/60 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-white/80">
+                <div
+                  className="absolute right-8 top-8 rounded bg-black/60 px-4 py-2 uppercase tracking-wide text-white/80"
+                  style={{ fontSize: 24 }}
+                >
                   1080×1920 · {playing ? 'play' : 'pause'}
                 </div>
                 {frame.inOverlap || frame.joinOverlay ? (
-                  <div className="absolute bottom-14 left-2 rounded bg-black/60 px-1.5 py-0.5 text-[10px] text-white">
+                  <div
+                    className="absolute left-8 rounded bg-black/60 px-4 py-2 text-white"
+                    style={{ bottom: 280, fontSize: 28 }}
+                  >
                     {joinLabels[frame.incoming?.beat.join ?? beat.join]}
                     {frame.joinOverlay ? ` · ${joinOverlayLabels[frame.joinOverlay.name]}` : ''}
                   </div>
                 ) : null}
                 {!sources[selected] ? (
-                  <div className="pointer-events-none absolute inset-x-3 bottom-16 z-10 rounded-md bg-black/55 px-3 py-2 text-center text-xs text-white/80">
+                  <div
+                    className="pointer-events-none absolute inset-x-16 z-10 rounded-md bg-black/55 px-8 py-6 text-center text-white/80"
+                    style={{ bottom: 420, fontSize: 36 }}
+                  >
                     Solte um MP4 aqui
                   </div>
                 ) : null}
               </>
             ) : null}
-          </div>
-          <p className="max-w-[18rem] text-center text-[11px] text-muted-foreground">
-            Punch 11% · drift 7% · fade in 0,7s · fade out 0,85s. Flash/leak/burn no meio do join,
-            por cima do xfade.
+          </ReelsStage>
+          <p className="text-center text-[11px] text-muted-foreground">
+            Canvas Reels 1080×1920, escala uniforme. Punch 11% · drift 7% · fade 0,7s / 0,85s.
           </p>
         </div>
 
-        <Card className="max-h-[min(42vh,420px)] overflow-y-auto">
+        <Card className="max-h-[min(70vh,820px)] overflow-y-auto">
           <CardHeader className="pb-2">
             <CardTitle className="text-sm">Take {selected + 1}</CardTitle>
           </CardHeader>
@@ -1084,169 +1477,157 @@ export default function AdminProgramNle(props: {
           <Redo2 className="mr-1.5 size-3.5" />
           Refazer
         </Button>
-        <p className="ml-auto font-mono text-xs text-muted-foreground">
-          {formatTimecode(time)} / {formatTimecode(duration)}
-        </p>
-      </div>
-      <input
-        type="range"
-        min={0}
-        max={duration || 1}
-        step={0.01}
-        value={Math.min(time, duration)}
-        aria-label="Playhead"
-        className="w-full accent-primary"
-        onChange={(event) => seek(Number(event.target.value))}
-      />
-      <p className="text-[11px] text-muted-foreground">
-        Espaço play/pause · C cortar · ←/→ 1s · Shift+setas take · J/L 1s · K parar · Delete remove
-        · cada lado do corte precisa de 0,8s.
-      </p>
-
-      <div
-        ref={timelineRef}
-        className="select-none rounded-xl border bg-muted/30 p-3"
-        onPointerDown={onTimelinePointer}
-        onPointerMove={onTimelineMove}
-        onPointerUp={onTimelineUp}
-        onPointerCancel={onTimelineUp}
-      >
-        <div className="relative mb-2 h-4">
-          {Array.from({ length: Math.floor(duration) + 1 }, (_, second) => (
-            <span
-              key={second}
-              className="absolute top-0 -translate-x-1/2 font-mono text-[9px] text-muted-foreground"
-              style={{ left: `${duration > 0 ? (second / duration) * 100 : 0}%` }}
-            >
-              {second}s
-            </span>
-          ))}
-        </div>
-        <p className="mb-1 text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
-          Vídeo · {spec.beats.length} takes
-        </p>
-        <div className="relative h-24 overflow-hidden rounded-md bg-background">
-          {clips.map((clip) => (
-            <div
-              key={`${clip.beat.name}-${clip.index}`}
-              title={`${clip.beat.name} · ${clip.duration.toFixed(1)}s · ${cameraRoleLabels[roleOf(clip.beat)]}`}
-              style={{
-                left: `${duration > 0 ? (clip.start / duration) * 100 : 0}%`,
-                width: `${duration > 0 ? (clip.duration / duration) * 100 : 0}%`,
-              }}
-              className={cn(
-                'pointer-events-none absolute top-1 bottom-1 overflow-hidden rounded border text-left text-[10px] font-medium text-white',
-                roleTone[roleOf(clip.beat)],
-                selected === clip.index
-                  ? 'ring-2 ring-primary ring-offset-1 ring-offset-background'
-                  : 'opacity-90',
-              )}
-            >
-              <span className="block truncate px-1.5 pt-1.5">{clip.beat.name}</span>
-              <span className="block truncate px-1.5 opacity-85">
-                {cameraRoleLabels[roleOf(clip.beat)]}
-              </span>
-              <span className="block truncate px-1.5 opacity-75">
-                {sources[clip.index]?.name ?? `${clip.duration.toFixed(1)}s`}
-              </span>
-            </div>
-          ))}
-          {clips.slice(1).map((clip) => (
-            <div
-              key={`join-${clip.index}`}
-              title={`${joinLabels[clip.beat.join]} ${clip.joinOverlap.toFixed(2)}s`}
-              className="absolute top-0 h-full w-0.5 bg-white/90"
-              style={{ left: `${duration > 0 ? (clip.start / duration) * 100 : 0}%` }}
-            />
-          ))}
-          <div
-            className="pointer-events-none absolute top-0 z-10 h-full w-0.5 bg-red-500"
-            style={{ left: `${playheadPct}%` }}
-          />
-        </div>
-        <p className="mb-1 mt-3 text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
-          FX no join · overlay transparente
-        </p>
-        <div className="relative h-8 overflow-hidden rounded-md bg-background">
-          {overlayHits.length ? (
-            overlayHits.map((hit) => (
-              <div
-                key={`fx-${hit.clipIndex}`}
-                title={`${joinOverlayLabels[hit.name]} ${hit.duration.toFixed(2)}s no meio do join`}
-                className={cn(
-                  'absolute inset-y-1 overflow-hidden rounded border px-1 text-[10px] font-medium text-white',
-                  hit.name === 'flash' && 'border-white/40 bg-white/70 text-black',
-                  hit.name === 'leak' && 'border-orange-300/50 bg-orange-400/70',
-                  hit.name === 'burn' && 'border-amber-200/50 bg-amber-500/80',
-                )}
-                style={{
-                  left: `${duration > 0 ? (hit.start / duration) * 100 : 0}%`,
-                  width: `${duration > 0 ? Math.max(1.2, (hit.duration / duration) * 100) : 0}%`,
-                }}
-              >
-                {joinOverlayLabels[hit.name]}
-              </div>
-            ))
-          ) : (
-            <p className="px-2 py-1.5 text-[10px] text-muted-foreground">
-              {selected === 0
-                ? 'O take 1 não tem join. Selecione o take seguinte e ponha Flash, Leak ou Burn.'
-                : 'Flash, leak ou burn neste take — sentam-se no meio da transição, por cima do xfade.'}
-            </p>
-          )}
-          <div
-            className="pointer-events-none absolute top-0 z-10 h-full w-0.5 bg-red-500"
-            style={{ left: `${playheadPct}%` }}
-          />
-        </div>
-        <p className="mb-1 mt-3 text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
-          Legendas
-        </p>
-        <div className="relative h-7 overflow-hidden rounded-md bg-background">
-          {spec.captions.strategy === 'full' ? (
-            <div
-              className="absolute inset-y-1 rounded bg-primary/40"
-              style={{
-                width: `${duration > 0 ? (Math.min(FACTORY_LIMITS.captionSeconds, duration) / duration) * 100 : 0}%`,
-              }}
-            />
-          ) : (
-            <p className="px-2 py-1 text-[10px] text-muted-foreground">
-              Desligadas — o worker não queima ASS
-            </p>
-          )}
-          <div
-            className="pointer-events-none absolute top-0 z-10 h-full w-0.5 bg-red-500"
-            style={{ left: `${playheadPct}%` }}
-          />
-        </div>
-        <p className="mb-1 mt-3 text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
-          Áudio da fábrica
-        </p>
-        <div className="relative h-7 overflow-hidden rounded-md bg-background">
-          <div
-            className="absolute inset-y-1 left-0 rounded-l bg-sky-400/30"
-            style={{
-              width: `${duration > 0 ? (FACTORY_LIMITS.audioFadeInSeconds / duration) * 100 : 0}%`,
-            }}
-          />
-          <div
-            className="absolute inset-y-1 rounded-r bg-sky-400/30"
-            style={{
-              left: `${duration > 0 ? ((duration - FACTORY_LIMITS.audioFadeOutSeconds) / duration) * 100 : 0}%`,
-              width: `${duration > 0 ? (FACTORY_LIMITS.audioFadeOutSeconds / duration) * 100 : 0}%`,
-            }}
-          />
-          <p className="relative px-2 py-1 text-[10px] text-muted-foreground">
-            fade 0,55s / 0,8s · loudnorm · não editável aqui
+        <div className="ml-auto flex items-center gap-1">
+          <TransportButton
+            label="Afastar timeline"
+            disabled={zoom <= 1}
+            onClick={() => setZoom((value) => Math.max(1, Number((value - 0.5).toFixed(1))))}
+          >
+            <Minus className="size-4" />
+          </TransportButton>
+          <span className="w-8 text-center font-mono text-[10px] text-muted-foreground">
+            {zoom.toFixed(1)}x
+          </span>
+          <TransportButton
+            label="Aproximar timeline"
+            disabled={zoom >= 4}
+            onClick={() => setZoom((value) => Math.min(4, Number((value + 0.5).toFixed(1))))}
+          >
+            <Plus className="size-4" />
+          </TransportButton>
+          <p className="ml-2 font-mono text-xs text-muted-foreground">
+            {formatTimecode(time)} / {formatTimecode(duration)}
           </p>
-          <div
-            className="pointer-events-none absolute top-0 z-10 h-full w-0.5 bg-red-500"
-            style={{ left: `${playheadPct}%` }}
-          />
         </div>
       </div>
-
+      <div className="overflow-x-auto rounded-xl border border-zinc-800 bg-zinc-950 p-2">
+        <div className="min-w-full" style={{ width: `${zoom * 100}%` }}>
+          <div className="flex">
+            <div className="flex w-9 shrink-0 flex-col font-mono text-[9px] font-bold uppercase tracking-wider text-zinc-500">
+              <div className="h-4" />
+              <div className="flex h-24 items-center justify-center">V1</div>
+              <div className="flex h-8 items-center justify-center">FX</div>
+              <div className="flex h-7 items-center justify-center">CC</div>
+              <div className="flex h-7 items-center justify-center">A1</div>
+            </div>
+            <div
+              ref={timelineRef}
+              className="relative min-w-0 flex-1 select-none"
+              onPointerDown={onTimelinePointer}
+              onPointerMove={onTimelineMove}
+              onPointerUp={onTimelineUp}
+              onPointerCancel={onTimelineUp}
+            >
+              <div className="relative mb-0 h-4">
+                {Array.from({ length: Math.floor(duration) + 1 }, (_, second) => (
+                  <span
+                    key={second}
+                    className="absolute top-0 -translate-x-1/2 font-mono text-[9px] text-zinc-500"
+                    style={{ left: `${duration > 0 ? (second / duration) * 100 : 0}%` }}
+                  >
+                    {second}s
+                  </span>
+                ))}
+              </div>
+              <div className="relative h-24 overflow-hidden rounded-sm bg-zinc-900">
+                {clips.map((clip) => (
+                  <div
+                    key={`${clip.beat.name}-${clip.index}`}
+                    title={`${clip.beat.name} · ${clip.duration.toFixed(1)}s · ${cameraRoleLabels[roleOf(clip.beat)]} · arraste para reordenar, pontas para trim`}
+                    style={{
+                      left: `${duration > 0 ? (clip.start / duration) * 100 : 0}%`,
+                      width: `${duration > 0 ? (clip.duration / duration) * 100 : 0}%`,
+                    }}
+                    className={cn(
+                      'absolute top-1 bottom-1 overflow-hidden rounded-sm border text-left text-[10px] font-medium text-white',
+                      roleTone[roleOf(clip.beat)],
+                      selected === clip.index ? 'ring-2 ring-red-400' : 'opacity-90',
+                    )}
+                    onPointerDown={(event) => beginClipDrag(event, clip.index)}
+                  >
+                    <button
+                      type="button"
+                      aria-label={`Trim início do take ${clip.index + 1}`}
+                      className="absolute inset-y-0 left-0 z-10 w-1.5 cursor-ew-resize bg-white/30 hover:bg-white"
+                      onPointerDown={(event) => beginClipDrag(event, clip.index, 'left')}
+                    />
+                    <span className="block truncate px-2 pt-1.5">{clip.beat.name}</span>
+                    <span className="block truncate px-2 opacity-85">
+                      {cameraRoleLabels[roleOf(clip.beat)]} · {clip.duration.toFixed(1)}s
+                    </span>
+                    <button
+                      type="button"
+                      aria-label={`Trim fim do take ${clip.index + 1}`}
+                      className="absolute inset-y-0 right-0 z-10 w-1.5 cursor-ew-resize bg-white/30 hover:bg-white"
+                      onPointerDown={(event) => beginClipDrag(event, clip.index, 'right')}
+                    />
+                  </div>
+                ))}
+                {clips.slice(1).map((clip) => (
+                  <div
+                    key={`join-${clip.index}`}
+                    title={`${joinLabels[clip.beat.join]} ${clip.joinOverlap.toFixed(2)}s`}
+                    className="pointer-events-none absolute top-0 h-full w-px bg-white/70"
+                    style={{ left: `${duration > 0 ? (clip.start / duration) * 100 : 0}%` }}
+                  />
+                ))}
+              </div>
+              <div className="relative mt-px h-8 overflow-hidden bg-zinc-900">
+                {overlayHits.length ? (
+                  overlayHits.map((hit) => (
+                    <div
+                      key={`fx-${hit.clipIndex}`}
+                      title={`${joinOverlayLabels[hit.name]} ${hit.duration.toFixed(2)}s no meio do join`}
+                      className={cn(
+                        'absolute inset-y-1 overflow-hidden rounded-sm border px-1 text-[10px] font-medium text-white',
+                        hit.name === 'flash' && 'border-white/40 bg-white/70 text-black',
+                        hit.name === 'leak' && 'border-orange-300/50 bg-orange-400/70',
+                        hit.name === 'burn' && 'border-amber-200/50 bg-amber-500/80',
+                      )}
+                      style={{
+                        left: `${duration > 0 ? (hit.start / duration) * 100 : 0}%`,
+                        width: `${duration > 0 ? Math.max(1.2, (hit.duration / duration) * 100) : 0}%`,
+                      }}
+                    >
+                      {joinOverlayLabels[hit.name]}
+                    </div>
+                  ))
+                ) : (
+                  <p className="px-2 py-1.5 text-[10px] text-zinc-500">FX no join</p>
+                )}
+              </div>
+              <div className="relative mt-px h-7 overflow-hidden bg-zinc-900">
+                {spec.captions.strategy === 'full' ? (
+                  <div
+                    className="absolute inset-y-1 rounded-sm bg-emerald-400/50"
+                    style={{
+                      width: `${duration > 0 ? (Math.min(FACTORY_LIMITS.captionSeconds, duration) / duration) * 100 : 0}%`,
+                    }}
+                  />
+                ) : (
+                  <p className="px-2 py-1 text-[10px] text-zinc-500">CC off</p>
+                )}
+              </div>
+              <div className="relative mt-px h-7 overflow-hidden bg-zinc-900">
+                <div
+                  className="absolute inset-y-1 left-0 rounded-l-sm bg-sky-400/40"
+                  style={{
+                    width: `${duration > 0 ? (FACTORY_LIMITS.audioFadeInSeconds / duration) * 100 : 0}%`,
+                  }}
+                />
+                <div
+                  className="absolute inset-y-1 rounded-r-sm bg-sky-400/40"
+                  style={{
+                    left: `${duration > 0 ? ((duration - FACTORY_LIMITS.audioFadeOutSeconds) / duration) * 100 : 0}%`,
+                    width: `${duration > 0 ? (FACTORY_LIMITS.audioFadeOutSeconds / duration) * 100 : 0}%`,
+                  }}
+                />
+              </div>
+              <PlayheadMark pct={playheadPct} />
+            </div>
+          </div>
+        </div>
+      </div>
       <div className="flex flex-wrap gap-2">
         <Button
           variant="outline"
@@ -1340,31 +1721,20 @@ export default function AdminProgramNle(props: {
           <CardTitle className="text-sm">Capacidade desta fábrica</CardTitle>
         </CardHeader>
         <CardContent className="space-y-3">
-          <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
-            <CapacityStat
-              label="Takes"
-              value={`${capacity.takeCount} / ${FACTORY_LIMITS.maxTakes}`}
-              hint="mín. 3 · máx. 12"
-            />
-            <CapacityStat
-              label="Duração montada"
-              value={`${capacity.duration.toFixed(1)}s`}
-              hint={`alvo ${capacity.target}s · nominais ${capacity.nominal.toFixed(1)}s`}
-            />
-            <CapacityStat
-              label="Overlap dos joins"
-              value={`${capacity.overlapSaved.toFixed(2)}s`}
-              hint="cortes secos quase não comem tempo"
-            />
-            <CapacityStat
-              label="Comida / ofício"
-              value={`${Math.round(capacity.foodShare * 100)}% / ${Math.round(capacity.kitchenShare * 100)}%`}
-              hint={`papéis ${capacity.roles.map((role) => cameraRoleLabels[role]).join(', ') || '—'}`}
-            />
+          <div className="flex flex-wrap items-baseline justify-between gap-2 rounded-lg border bg-muted/20 px-3 py-2">
+            <p className="font-mono text-sm">
+              {capacity.takeCount}/{FACTORY_LIMITS.maxTakes} takes · {capacity.duration.toFixed(1)}s
+              / {capacity.target}s
+            </p>
+            <p className="text-xs text-muted-foreground">
+              overlap {capacity.overlapSaved.toFixed(2)}s · comida{' '}
+              {Math.round(capacity.foodShare * 100)}% · ofício{' '}
+              {Math.round(capacity.kitchenShare * 100)}%
+            </p>
           </div>
           <p className="text-xs text-muted-foreground">
             1 FFmpeg de cada vez neste KVM. Ken Burns (drift/punch) só no perfil HIGH. Título, logo,
-            CTA e end card não entram neste render.
+            lower third, CTA e end card queimam em ASS/overlay; PNG do logo vem do restaurante.
           </p>
           {capacity.warnings.length ? (
             <ul className="list-disc space-y-1 pl-5 text-sm text-warning">
@@ -1419,18 +1789,6 @@ export default function AdminProgramNle(props: {
           </div>
         </CardContent>
       </Card>
-    </div>
-  );
-}
-
-function CapacityStat(props: { label: string; value: string; hint: string }) {
-  return (
-    <div className="rounded-lg border bg-muted/20 px-3 py-2">
-      <p className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
-        {props.label}
-      </p>
-      <p className="font-heading text-lg font-semibold">{props.value}</p>
-      <p className="text-[11px] text-muted-foreground">{props.hint}</p>
     </div>
   );
 }

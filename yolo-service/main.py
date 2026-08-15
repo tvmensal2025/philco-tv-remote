@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import os
 import tempfile
+import threading
 import time
 from io import BytesIO
 from typing import Any
@@ -21,12 +22,15 @@ from crop import (
     PLATE_SCENE_NAMES,
     POSE_NAMES,
     TABLE_CLASS_NAMES,
+    bbox_area,
     choose_anchor,
     crop_9_16,
+    crop_contain_9_16,
     crop_score,
     ema,
     face_bbox_from_pose,
     is_full_body,
+    pick_standing_person,
     pose_center,
     suggested_shot,
 )
@@ -40,6 +44,8 @@ MAX_SECONDS = float(os.getenv("YOLO_MAX_SECONDS", "20"))
 FPS_SAMPLE = float(os.getenv("YOLO_FPS_SAMPLE", "2"))
 API_KEY = os.getenv("YOLO_API_KEY", "").strip()
 WEIGHTS_DIR = os.getenv("YOLO_CONFIG_DIR", "/root/.ultralytics")
+YOLO_MAX_CONCURRENCY = max(1, int(os.getenv("YOLO_MAX_CONCURRENCY", "1")))
+_infer_gate = threading.BoundedSemaphore(YOLO_MAX_CONCURRENCY)
 
 _models: dict[str, Any] = {"detect": None, "pose": None, "face": None, "seg": None}
 _face_failed = False
@@ -72,6 +78,19 @@ class VideoRequest(BaseModel):
     mode: str = Field(default="auto", pattern="^(auto|person|face|plate)$")
     max_seconds: float | None = None
     confidence: float | None = None
+
+
+def infer_slot():
+    class _Guard:
+        def __enter__(self):
+            if not _infer_gate.acquire(blocking=False):
+                raise HTTPException(status_code=429, detail="YOLO_BUSY")
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            _infer_gate.release()
+
+    return _Guard()
 
 
 def require_key(authorization: str | None) -> None:
@@ -249,7 +268,15 @@ def analyze_ndarray(image: np.ndarray, mode: str, conf: float, include_pose: boo
     plates, food, has_plate_scene = split_scene(items)
     frame_h, frame_w = image.shape[:2]
     cx, cy, anchor = choose_anchor(mode, people, faces, plates, food, frame_w, frame_h)
-    bbox = crop_9_16(frame_w, frame_h, cx, cy)
+    subject = pick_standing_person(people)
+    if not subject and (plates or food):
+        dish = max(plates + food, key=lambda item: bbox_area(item["bbox"]))
+        subject = dish
+    if subject:
+        bbox, crop_mode, tight = crop_contain_9_16(frame_w, frame_h, subject["bbox"])
+    else:
+        bbox = crop_9_16(frame_w, frame_h, cx, cy)
+        crop_mode, tight = "crop", False
     has_person = bool(people)
     has_face = bool(faces)
     shot = suggested_shot(people, faces, has_plate_scene, mode)
@@ -278,6 +305,8 @@ def analyze_ndarray(image: np.ndarray, mode: str, conf: float, include_pose: boo
             "bbox": bbox,
             "anchor": anchor,
             "score": crop_score(anchor, has_person, has_face, has_plate_scene, mode),
+            "mode": crop_mode,
+            "tight": tight,
         },
         "inference_time_ms": int((time.perf_counter() - started) * 1000),
     }
@@ -364,6 +393,7 @@ def root():
         "health": "/health",
         "analyze_frame": "POST /analyze-frame",
         "analyze_video": "POST /analyze-video",
+        "track_clip": "POST /track-clip",
         "worker_url": "http://cenapronta_yolo:8000",
     }
 
@@ -378,31 +408,131 @@ def health():
         "max_seconds": MAX_SECONDS,
         "device": "cpu",
         "weights_dir": WEIGHTS_DIR,
+        "max_concurrency": YOLO_MAX_CONCURRENCY,
     }
 
 
 @app.post("/analyze-frame")
 def analyze_frame(body: FrameRequest):
-    image = decode_image(body)
-    conf = body.confidence if body.confidence is not None else DEFAULT_CONF
-    return analyze_ndarray(image, body.mode, conf, body.include_pose, body.include_face)
+    with infer_slot():
+        image = decode_image(body)
+        conf = body.confidence if body.confidence is not None else DEFAULT_CONF
+        return analyze_ndarray(image, body.mode, conf, body.include_pose, body.include_face)
+
+
+@app.post("/track-clip")
+async def track_clip(
+    video: UploadFile = File(...),
+    mode: str = "auto",
+    fps_sample: float = 4,
+    max_seconds: float = 8,
+    authorization: str | None = Header(default=None),
+):
+    require_key(authorization)
+    suffix = os.path.splitext(video.filename or "clip.mp4")[1] or ".mp4"
+    handle = tempfile.NamedTemporaryFile(suffix=suffix, delete=False)
+    handle.write(await video.read())
+    handle.close()
+    try:
+        with infer_slot():
+            return track_video_path(handle.name, mode, fps_sample, min(MAX_SECONDS, max_seconds))
+    finally:
+        os.unlink(handle.name)
+
+
+def track_video_path(path: str, mode: str, fps_sample: float, max_seconds: float):
+    detect = get_model("detect")
+    started = time.perf_counter()
+    stride = max(1, int(round(30 / max(1.0, fps_sample))))
+    tracks: dict[int, list[dict]] = {}
+    food_hits = 0
+    samples = 0
+    frame_w = frame_h = 0
+    for result in detect.track(
+        source=path,
+        persist=True,
+        stream=True,
+        verbose=False,
+        tracker="bytetrack.yaml",
+        vid_stride=stride,
+        conf=DEFAULT_CONF,
+    ):
+        if result.orig_img is None:
+            continue
+        frame_h, frame_w = result.orig_img.shape[:2]
+        t = float(result.speed.get("t", samples / max(1.0, fps_sample))) if isinstance(getattr(result, "speed", None), dict) else samples / max(1.0, fps_sample)
+        t = min(max_seconds, samples / max(1.0, fps_sample))
+        if t > max_seconds:
+            break
+        samples += 1
+        boxes = result.boxes
+        if boxes is None:
+            continue
+        ids = boxes.id.int().tolist() if boxes.id is not None else [None] * len(boxes)
+        xywh = boxes.xywh.cpu().tolist()
+        cls = boxes.cls.int().tolist()
+        confs = boxes.conf.tolist()
+        names = result.names
+        for i, box in enumerate(xywh):
+            cx, cy, w, h = box
+            bbox = [int(cx - w / 2), int(cy - h / 2), int(w), int(h)]
+            class_name = names.get(cls[i], str(cls[i])) if isinstance(names, dict) else str(cls[i])
+            track_id = ids[i]
+            row = {
+                "time_ms": int(t * 1000),
+                "track_id": int(track_id) if track_id is not None else None,
+                "class_name": class_name,
+                "confidence": float(confs[i]),
+                "bbox": bbox,
+            }
+            if class_name in PLATE_SCENE_NAMES:
+                food_hits += 1
+            if track_id is None:
+                continue
+            tracks.setdefault(int(track_id), []).append(row)
+    people = [
+        item
+        for item in (row for rows in tracks.values() for row in rows)
+        if item["class_name"] == "person"
+    ]
+    food = [
+        item
+        for item in (row for rows in tracks.values() for row in rows)
+        if item["class_name"] in PLATE_SCENE_NAMES
+    ]
+    return {
+        "success": True,
+        "tracker": "bytetrack",
+        "device": "cpu",
+        "frame": {"width": frame_w, "height": frame_h},
+        "sampled_frames": samples,
+        "inference_time_ms": int((time.perf_counter() - started) * 1000),
+        "tracks": [
+            {"track_id": track_id, "observations": rows}
+            for track_id, rows in tracks.items()
+        ],
+        "people": people[-12:],
+        "food": food[-12:],
+        "food_hits": food_hits,
+    }
 
 
 @app.post("/analyze-video")
 def analyze_video(body: VideoRequest):
     if not body.video_url:
         raise HTTPException(status_code=400, detail="video_url required")
-    path = download_video(body.video_url)
-    try:
-        return analyze_video_path(
-            path,
-            mode=body.mode,
-            fps_sample=body.fps_sample or FPS_SAMPLE,
-            max_seconds=min(MAX_SECONDS, body.max_seconds or MAX_SECONDS),
-            conf=body.confidence if body.confidence is not None else DEFAULT_CONF,
-        )
-    finally:
-        os.unlink(path)
+    with infer_slot():
+        path = download_video(body.video_url)
+        try:
+            return analyze_video_path(
+                path,
+                mode=body.mode,
+                fps_sample=body.fps_sample or FPS_SAMPLE,
+                max_seconds=min(MAX_SECONDS, body.max_seconds or MAX_SECONDS),
+                conf=body.confidence if body.confidence is not None else DEFAULT_CONF,
+            )
+        finally:
+            os.unlink(path)
 
 
 @app.post("/analyze-video-upload")

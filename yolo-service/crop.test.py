@@ -1,6 +1,6 @@
 import unittest
 
-from crop import bbox_area, choose_anchor, crop_9_16, crop_score, pose_center
+from crop import bbox_area, choose_anchor, crop_9_16, crop_contain_9_16, crop_score, pick_standing_person, pose_center
 
 
 class CropTests(unittest.TestCase):
@@ -48,6 +48,42 @@ class CropTests(unittest.TestCase):
 
     def test_bbox_area(self):
         self.assertEqual(bbox_area([0, 0, 10, 20]), 200)
+
+    def test_contain_keeps_left_person_inside_window(self):
+        box, mode, _tight = crop_contain_9_16(1280, 720, [380, 140, 280, 520])
+        x, y, w, h = box
+        self.assertEqual(mode, "crop")
+        self.assertEqual(y, 0)
+        self.assertEqual(h, 720)
+        self.assertLessEqual(x, 380)
+        self.assertGreaterEqual(x + w, 380 + 280)
+
+    def test_contain_pad_blur_when_body_wider_than_9_16(self):
+        _box, mode, tight = crop_contain_9_16(1280, 720, [80, 40, 720, 640])
+        self.assertEqual(mode, "pad_blur")
+        self.assertTrue(tight)
+
+    def test_contain_bbox_stays_inside_frame(self):
+        box, mode, _tight = crop_contain_9_16(1280, 720, [900, 10, 370, 700])
+        x, y, w, h = box
+        self.assertEqual(mode, "pad_blur")
+        self.assertGreaterEqual(x, 0)
+        self.assertGreaterEqual(y, 0)
+        self.assertLessEqual(x + w, 1280)
+        self.assertLessEqual(y + h, 720)
+        self.assertEqual(x % 2, 0)
+        self.assertEqual(y % 2, 0)
+        self.assertEqual(w % 2, 0)
+        self.assertEqual(h % 2, 0)
+
+    def test_standing_person_beats_seated_blob(self):
+        picked = pick_standing_person(
+            [
+                {"bbox": [500, 400, 360, 220], "is_full_body": False},
+                {"bbox": [380, 140, 220, 520], "is_full_body": True},
+            ]
+        )
+        self.assertEqual(picked["bbox"], [380, 140, 220, 520])
 
 
 if __name__ == "__main__":

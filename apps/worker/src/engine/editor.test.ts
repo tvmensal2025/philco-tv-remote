@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { ClipCandidate } from '../adapters/analyzer.js';
 import { coverageReport } from './coverage.js';
-import { snapTake } from './peak-snap.js';
+import { snapTake, spreadPreferredStart } from './peak-snap.js';
 import { compileProgram } from './planner.js';
 import { playbookFor } from './playbook.js';
 
@@ -60,14 +60,45 @@ describe('four-program editor', () => {
     expect(Math.abs(second.start - first.start)).toBeGreaterThanOrEqual(1.5);
   });
 
-  it('compiles Casa around ambience, not food', () => {
+  it('anchors a preferred start across the window when there are no peaks', () => {
+    const late = snapTake({
+      windowStart: 5,
+      windowDuration: 38,
+      takeDuration: 5.4,
+      peaks: [],
+      preferredStart: spreadPreferredStart({
+        windowStart: 5,
+        windowDuration: 38,
+        takeDuration: 5.4,
+        index: 4,
+        count: 5,
+      }),
+    });
+    expect(late.start).toBeGreaterThan(20);
+  });
+
+  it('lets Casa open on food when it is the strongest listed camera', () => {
     const plan = compileProgram({ clips: clips(), program: 'casa', peaksByCamera: peaks() });
-    expect(plan.scenes[0]?.role).toBe('ambience');
+    expect(['food', 'master', 'ambience', 'side']).toContain(plan.scenes[0]?.role);
     expect(plan.join).toBe('dissolve');
     const food = plan.scenes
       .filter((scene) => scene.role === 'food')
       .reduce((sum, scene) => sum + scene.duration, 0);
-    expect(food / plan.scenes.reduce((sum, scene) => sum + scene.duration, 0)).toBeLessThan(0.28);
+    expect(food / plan.scenes.reduce((sum, scene) => sum + scene.duration, 0)).toBeLessThan(0.72);
+  });
+
+  it('lets a well-lit master beat a weak food camera on the Casa hook', () => {
+    const plan = compileProgram({
+      clips: clips(),
+      program: 'casa',
+      peaksByCamera: peaks(),
+      cameraScores: new Map([
+        [1, 88],
+        [3, 31],
+        [4, 70],
+      ]),
+    });
+    expect(plan.scenes[0]?.role).toBe('master');
   });
 
   it('compiles Oficio with kitchen majority and hard cuts', () => {
@@ -99,14 +130,106 @@ describe('four-program editor', () => {
     ).toBe(false);
   });
 
-  it('skips Casa when the room camera is missing', () => {
-    expect(() =>
-      compileProgram({
-        clips: clips().filter((clip) => clip.role !== 'ambience'),
-        program: 'casa',
-        peaksByCamera: peaks(),
-      }),
-    ).toThrow(/SKIP_PROGRAM:MISSING_ROLE:ambience/);
+  it('lets Casa stay on one camera when scores say the others would hurt the reel', () => {
+    const plan = compileProgram({
+      clips: clips(),
+      program: 'casa',
+      peaksByCamera: peaks(),
+      cameraScores: new Map([
+        [1, 88],
+        [2, 12],
+        [3, 28],
+        [4, 18],
+      ]),
+      editMode: 'single_camera',
+      compatiblePositions: new Set([1]),
+    });
+    expect(plan.scenes.every((scene) => scene.position === 1)).toBe(true);
+    expect(plan.scenes.length).toBeGreaterThanOrEqual(3);
+  });
+
+  it('spreads high-quality single-camera Casa takes across the available window', () => {
+    const plan = compileProgram({
+      clips: clips().map((clip) => ({ ...clip, windowDurationSeconds: 38 })),
+      program: 'casa',
+      peaksByCamera: new Map(),
+      cameraScores: new Map([
+        [1, 88],
+        [2, 12],
+        [3, 28],
+        [4, 18],
+      ]),
+      editMode: 'single_camera',
+      compatiblePositions: new Set([1]),
+    });
+    const starts = plan.scenes.map((scene) => scene.source_start_offset);
+    const span = Math.max(...starts) - Math.min(...starts);
+    expect(plan.scenes.every((scene) => scene.position === 1)).toBe(true);
+    expect(plan.scenes.length).toBeGreaterThanOrEqual(4);
+    expect(span).toBeGreaterThan(15);
+    expect(Math.max(...starts)).toBeGreaterThan(20);
+    expect(plan.duration).toBeGreaterThan(14);
+    expect(plan.duration).toBeLessThan(40);
+  });
+
+  it('treats a strong Vision ranking as high-quality even if the editorial score is mid', () => {
+    const plan = compileProgram({
+      clips: clips().map((clip) => ({ ...clip, windowDurationSeconds: 38 })),
+      program: 'casa',
+      peaksByCamera: new Map(),
+      analysis: {
+        clips: [],
+        score: 80,
+        reason: 'C1 is the usable kitchen',
+        detailedScores: { food: 70, action: 70, visual: 80, marketing: 60, ambience: 40 },
+        scenes: [],
+        captionPt: '',
+        hashtags: [],
+        provider: 'openai',
+        cameraRankings: [
+          { cameraPosition: 1, score: 88, reason: 'strong tandoor action' },
+          { cameraPosition: 2, score: 20, reason: 'dark' },
+        ],
+      },
+      cameraScores: new Map([
+        [1, 65],
+        [2, 23],
+        [3, 54],
+        [4, 0],
+      ]),
+      editMode: 'single_camera',
+      compatiblePositions: new Set([1]),
+    });
+    const starts = plan.scenes.map((scene) => scene.source_start_offset);
+    expect(Math.max(...starts) - Math.min(...starts)).toBeGreaterThan(15);
+  });
+
+  it('keeps weak single-camera takes near the start of the window', () => {
+    const plan = compileProgram({
+      clips: clips().map((clip) => ({ ...clip, windowDurationSeconds: 38 })),
+      program: 'casa',
+      peaksByCamera: new Map(),
+      cameraScores: new Map([
+        [1, 40],
+        [2, 12],
+        [3, 18],
+        [4, 10],
+      ]),
+      editMode: 'single_camera',
+      compatiblePositions: new Set([1]),
+    });
+    const starts = plan.scenes.map((scene) => scene.source_start_offset);
+    expect(Math.max(...starts) - Math.min(...starts)).toBeLessThan(15);
+  });
+
+  it('still compiles Casa when the room camera is missing', () => {
+    const plan = compileProgram({
+      clips: clips().filter((clip) => clip.role !== 'ambience'),
+      program: 'casa',
+      peaksByCamera: peaks(),
+    });
+    expect(plan.scenes.length).toBeGreaterThanOrEqual(3);
+    expect(plan.scenes.some((scene) => scene.role === 'ambience')).toBe(false);
   });
 
   it('rejects a food-only Assinatura cut', () => {

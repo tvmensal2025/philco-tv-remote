@@ -9,7 +9,7 @@ CÂMERA / NVR → MP4 local → Uploader (watch imutável) → MinIO → recordi
   → READY → humano aprova → download
 ```
 
-IA decide. Software executa. QC verifica. Humano aprova. QC pass **nunca** vira `approved`.
+See also: `docs/SCALING.md`, `docs/RELIABILITY.md`, `docs/LOAD_TEST.md`.
 
 ## Pipeline V1 (baseline protegido)
 

@@ -9,6 +9,8 @@ import {
   joinOverlayHits,
   previewAtTime,
   programCapacity,
+  snapTime,
+  clampBeatDuration,
   splitSpecAtPlayhead,
 } from './program-timeline.js';
 
@@ -50,7 +52,10 @@ describe('program timeline editor', () => {
   it('simulates punch zoom and Casa fade-in like the FFmpeg graph', () => {
     const casa = cloneValidatedSpec('casa');
     expect(beatScale(casa.beats[0]!, 0)).toBe(1);
-    expect(beatScale(casa.beats[0]!, casa.beats[0]!.durationSeconds)).toBeCloseTo(1.07);
+    expect(beatScale(casa.beats[0]!, casa.beats[0]!.durationSeconds)).toBe(1);
+    const insert = casa.beats.find((beat) => beat.motion === 'punch');
+    expect(insert).toBeTruthy();
+    expect(beatScale(insert!, insert!.durationSeconds)).toBeCloseTo(1.11);
     const start = previewAtTime(casa, 0);
     expect(start?.outgoing.opacity).toBe(0);
     expect(start?.captionVisible).toBe(true);
@@ -80,6 +85,19 @@ describe('program timeline editor', () => {
     expect(mid?.incoming?.opacity).toBeCloseTo(0.5, 1);
     expect(mid?.fadeBlack).toBe(0);
   });
+
+  it('keeps the first 1.6s of Casa clean, then shows title; end card at the close', () => {
+    const casa = cloneValidatedSpec('casa');
+    const { duration } = buildProgramTimeline(casa);
+    const hook = previewAtTime(casa, 1.2);
+    const titled = previewAtTime(casa, 2.0);
+    const close = previewAtTime(casa, duration - 0.4);
+    expect(hook?.branding.title).toBe(false);
+    expect(hook?.branding.logo).toBe(true);
+    expect(titled?.branding.title).toBe(true);
+    expect(close?.branding.endCard).toBe(true);
+    expect(close?.branding.title).toBe(false);
+  });
 });
 
 describe('program spec diff', () => {
@@ -99,5 +117,25 @@ describe('program spec diff', () => {
     expect(lines.some((line) => /Take 2/.test(line) && /Dissolve/.test(line))).toBe(true);
     expect(lines.some((line) => /Flash/.test(line))).toBe(true);
     expect(diffProgramSpecs(from, from)).toEqual([]);
+  });
+
+  it('reports branding layers turning on and off', () => {
+    const from = cloneValidatedSpec('pulso');
+    const to = { ...from, branding: { ...from.branding, title: false, cta: false } };
+    const lines = diffProgramSpecs(from, to).map((line) => line.label);
+    expect(lines.some((line) => /Título/.test(line))).toBe(true);
+    expect(lines.some((line) => /CTA/.test(line))).toBe(true);
+  });
+});
+
+describe('timeline snap and trim', () => {
+  it('snaps the playhead to a join when close enough', () => {
+    const spec = cloneValidatedSpec('pulso');
+    const { clips } = buildProgramTimeline(spec);
+    const join = clips[1]!.start;
+    expect(snapTime(spec, join + 0.01, 0.1)).toBeCloseTo(join);
+    expect(snapTime(spec, join + 0.4, 0.1)).toBeCloseTo(join + 0.4);
+    expect(clampBeatDuration(0.2)).toBe(0.8);
+    expect(clampBeatDuration(40)).toBe(12);
   });
 });

@@ -1,7 +1,12 @@
 import type { CameraRole, EditProgram, JoinOverlayName, Playbook } from '@reelops/shared';
 import type { ClipCandidate, EditDecision, SceneAnalyzer } from '../adapters/analyzer.js';
 import { coverageReport } from './coverage.js';
-import { snapTake, type PeakHit } from './peak-snap.js';
+import {
+  HIGH_QUALITY_CAMERA_SCORE,
+  snapTake,
+  spreadPreferredStart,
+  type PeakHit,
+} from './peak-snap.js';
 import { cameraRoleOf, playbookFor, type PlaybookBeat } from './playbook.js';
 import type { StyleName } from './rhythm.js';
 import { joinedDuration, type MotionName } from '../pipeline/finish.js';
@@ -25,6 +30,11 @@ export type ReelPlanScene = {
   punchIn?: boolean;
   motion?: MotionName;
   crop?: [number, number, number, number];
+  cropMode?: 'crop' | 'pad_blur';
+  cropTight?: boolean;
+  cropFilter?: string;
+  shotStyle?: string;
+  reframe?: { strategy: string; trackId: number | null; qc?: unknown };
 };
 
 export type ReelPlan = {
@@ -69,6 +79,9 @@ export class ReelPlanner {
       peaksByCamera?: Map<string, PeakHit[]>;
       program?: EditProgram;
       playbook?: Playbook | null;
+      cameraScores?: Map<number, number>;
+      editMode?: 'single_camera' | 'dual_camera' | 'multicamera';
+      compatiblePositions?: Set<number>;
     },
   ): Promise<ReelPlan> {
     if (!clips.length) throw new Error('NO_CAMERA_SEGMENTS');
@@ -79,6 +92,9 @@ export class ReelPlanner {
       peaksByCamera: extras?.peaksByCamera ?? new Map(),
       analysis,
       playbook: extras?.playbook,
+      cameraScores: extras?.cameraScores,
+      editMode: extras?.editMode,
+      compatiblePositions: extras?.compatiblePositions,
     });
   }
 }
@@ -89,13 +105,15 @@ export function compileProgram(input: {
   peaksByCamera: Map<string, PeakHit[]>;
   analysis?: EditDecision;
   playbook?: Playbook | null;
+  cameraScores?: Map<number, number>;
+  editMode?: 'single_camera' | 'dual_camera' | 'multicamera';
+  compatiblePositions?: Set<number>;
 }): ReelPlan {
   const clips = input.clips.map((clip) => ({
     ...clip,
     role: clip.role ?? cameraRoleOf(clip.position),
   }));
   const roles = new Set(clips.map((clip) => clip.role));
-  if (input.program === 'casa' && !roles.has('ambience')) throw skip('ambience');
   if (input.program === 'oficio' && !roles.has('side')) throw skip('side');
   if (input.program === 'assinatura' && !roles.has('food')) throw skip('food');
   if (input.program === 'pulso' && roles.size < 3) throw skip('roles');
@@ -104,8 +122,15 @@ export function compileProgram(input: {
   const usedOffsets = new Map<string, number[]>();
   let lastCameraId: string | undefined;
   const scenes: ReelPlanScene[] = [];
+  const exploreSingleCamera =
+    input.editMode === 'single_camera' &&
+    Math.max(
+      0,
+      ...(input.cameraScores?.values() ?? []),
+      ...(input.analysis?.cameraRankings?.map((row) => row.score) ?? []),
+    ) >= HIGH_QUALITY_CAMERA_SCORE;
 
-  for (const beat of book.beats) {
+  for (const [beatIndex, beat] of book.beats.entries()) {
     const clip = pickClip(
       clips,
       beat,
@@ -113,6 +138,9 @@ export function compileProgram(input: {
       input.peaksByCamera,
       usedOffsets,
       book.program,
+      input.cameraScores,
+      input.editMode,
+      input.compatiblePositions,
     );
     if (!clip) continue;
     const windowDuration = clip.windowDurationSeconds ?? book.targetDuration;
@@ -122,6 +150,15 @@ export function compileProgram(input: {
       takeDuration: beat.durationSeconds,
       peaks: beat.preferPeak === false ? [] : (input.peaksByCamera.get(clip.cameraId) ?? []),
       usedOffsets: usedOffsets.get(clip.cameraId),
+      preferredStart: exploreSingleCamera
+        ? spreadPreferredStart({
+            windowStart: clip.startOffsetSeconds,
+            windowDuration,
+            takeDuration: beat.durationSeconds,
+            index: beatIndex,
+            count: book.beats.length,
+          })
+        : undefined,
     });
     usedOffsets.set(clip.cameraId, [...(usedOffsets.get(clip.cameraId) ?? []), snapped.start]);
     lastCameraId = clip.cameraId;
@@ -135,7 +172,7 @@ export function compileProgram(input: {
       transition: beat.join,
       joinDuration: beat.joinDurationSeconds,
       joinOverlay: beat.joinOverlay,
-      reason: beat.reason,
+      reason: `${beat.reason} · C${clip.position} score=${Math.round(quality(clip, beat, input.cameraScores))}`,
       position: clip.position,
       hasAudio: clip.hasAudio,
       role: clip.role ?? 'master',
@@ -211,6 +248,12 @@ function skip(role: string): Error {
   return new Error(`SKIP_PROGRAM:MISSING_ROLE:${role}`);
 }
 
+function quality(clip: ClipCandidate, beat: PlaybookBeat, cameraScores?: Map<number, number>) {
+  const index = beat.roles.indexOf(clip.role ?? cameraRoleOf(clip.position));
+  const roleBonus = index >= 0 ? 6 - Math.min(5, index) : 0;
+  return cameraScores?.get(clip.position) ?? 50 + roleBonus;
+}
+
 function pickClip(
   clips: ClipCandidate[],
   beat: PlaybookBeat,
@@ -218,27 +261,36 @@ function pickClip(
   peaksByCamera: Map<string, PeakHit[]>,
   usedOffsets: Map<string, number[]>,
   program: EditProgram,
+  cameraScores?: Map<number, number>,
+  editMode?: 'single_camera' | 'dual_camera' | 'multicamera',
+  compatiblePositions?: Set<number>,
 ) {
-  const allowAdjacent = program === 'oficio' || program === 'assinatura';
-  const ranked = [...clips].sort((a, b) => {
-    const aRole = beat.roles.indexOf(a.role ?? cameraRoleOf(a.position));
-    const bRole = beat.roles.indexOf(b.role ?? cameraRoleOf(b.position));
-    const aFit = aRole >= 0 ? aRole : 99;
-    const bFit = bRole >= 0 ? bRole : 99;
-    if (aFit !== bFit) return aFit - bFit;
+  const pool = clips.filter(
+    (clip) => !compatiblePositions || compatiblePositions.has(clip.position),
+  );
+  if (!pool.length) return undefined;
+  const scored = pool.map((clip) => quality(clip, beat, cameraScores));
+  const best = Math.max(...scored);
+  const second = [...scored].sort((a, b) => b - a)[1] ?? 0;
+  const dominant = best - second >= 12 || editMode === 'single_camera';
+  const allowAdjacent = program === 'oficio' || program === 'assinatura' || dominant;
+  const ranked = [...pool].sort((a, b) => {
+    const qa = quality(a, beat, cameraScores);
+    const qb = quality(b, beat, cameraScores);
+    if (Math.abs(qa - qb) >= 6) return qb - qa;
+    const aFit = beat.roles.indexOf(a.role ?? cameraRoleOf(a.position));
+    const bFit = beat.roles.indexOf(b.role ?? cameraRoleOf(b.position));
+    const aRole = aFit >= 0 ? aFit : 99;
+    const bRole = bFit >= 0 ? bFit : 99;
+    if (aRole !== bRole && Math.abs(qa - qb) < 6) return aRole - bRole;
     if (!allowAdjacent) {
       if (a.cameraId === lastCameraId) return 1;
       if (b.cameraId === lastCameraId) return -1;
     }
     return peakScore(b, peaksByCamera, usedOffsets) - peakScore(a, peaksByCamera, usedOffsets);
   });
-  const preferred = ranked.filter((clip) =>
-    beat.roles.includes(clip.role ?? cameraRoleOf(clip.position)),
-  );
-  const pool = (preferred.length ? preferred : ranked).filter(
-    (clip) => allowAdjacent || clip.cameraId !== lastCameraId,
-  );
-  return pool[0] ?? (!allowAdjacent ? ranked[0] : undefined);
+  const next = ranked.filter((clip) => allowAdjacent || clip.cameraId !== lastCameraId);
+  return next[0] ?? ranked[0];
 }
 
 function peakScore(

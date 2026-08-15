@@ -109,6 +109,9 @@ export const sceneDecisionV2Schema = z
     importance: score.default(50),
     cutSafetyScore: score.nullable().default(null),
     zoomEvents: z.array(zoomEventSchema).max(8).default([]),
+    reason: z.string().max(220).optional(),
+    cameraScore: score.optional(),
+    coherenceScore: score.optional(),
   })
   .refine((scene) => scene.sourceEndMs > scene.sourceStartMs, {
     message: 'sourceEndMs must be after sourceStartMs',
@@ -140,6 +143,7 @@ export const videoEditDecisionV2Schema = z.object({
     minimumVisualScore: score.default(0),
     minimumBrandScore: score.default(0),
   }),
+  editMode: z.enum(['single_camera', 'dual_camera', 'multicamera']).optional(),
   text: z.object({
     enabled: z.boolean(),
     title: z.string().max(80).nullable(),

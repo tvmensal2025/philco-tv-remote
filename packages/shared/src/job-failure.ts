@@ -9,7 +9,7 @@ export const jobFailureClasses = [
 export type JobFailureClass = (typeof jobFailureClasses)[number];
 
 const TRANSIENT =
-  /timeout|econnrefused|enotfound|429|rate.?limit|temporar|econnreset|socket hang up|REDIS|QUEUE_UNAVAILABLE|MEDIA_NOT_READY|5\d\d/i;
+  /timeout|econnrefused|enotfound|429|rate.?limit|temporar|econnreset|socket hang up|REDIS|QUEUE_UNAVAILABLE|MEDIA_NOT_READY|5\d\d|YOLO_TIMEOUT|YOLO_BUSY|VISION_CIRCUIT_OPEN|FFMPEG_TIMEOUT/i;
 const INPUT =
   /NO_CAMERA|INVALID_OUTPUT|NO_SCENES|STALE_JOB|INVALID_JOB|FRAME_EXTRACTION_FAILED|SKIP_PROGRAM/i;
 const PROVIDER =

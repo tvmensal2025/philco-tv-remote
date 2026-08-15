@@ -8,11 +8,14 @@ test.describe('estúdio NLE sem backend', () => {
 
     await expect(page.getByRole('heading', { name: 'Estúdio dos 4 programas' })).toBeVisible();
     await expect(page.getByText('Validado')).toBeVisible();
-    await expect(page.getByRole('button', { name: 'Reproduzir' })).toBeVisible();
+    await expect(page.getByRole('img', { name: 'Monitor Reels 1080 por 1920' })).toBeVisible();
     await expect(page.getByRole('button', { name: 'Cortar', exact: true })).toBeVisible();
-    await expect(page.getByRole('button', { name: 'Adicionar arquivo' })).toHaveCount(1);
+    await expect(page.getByRole('button', { name: 'Aproximar timeline' })).toBeVisible();
+    await expect(page.getByText('V1')).toBeVisible();
     await expect(page.getByText('Efeitos da fábrica')).toBeVisible();
     await expect(page.getByRole('button', { name: 'Dissolve' }).first()).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Título' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Logo' })).toBeVisible();
     await expect(page.getByText('Push direcional')).toBeHidden();
 
     await page.getByText(/Ainda não na fábrica/).click();

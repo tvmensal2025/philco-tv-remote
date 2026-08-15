@@ -6,6 +6,7 @@ import {
   renderEffectCatalog,
   specToPlaybook,
   validatedProgramPresets,
+  programBrandCopy,
 } from './program-preset.js';
 
 describe('validated four-program standard', () => {
@@ -25,10 +26,11 @@ describe('validated four-program standard', () => {
     expect(pulso.beats.at(-1)?.durationSeconds).toBe(2.6);
   });
 
-  it('opens Casa on ambience with dissolve, not food', () => {
+  it('lets Casa open on the strongest camera, not automatic ambience', () => {
     const casa = playbookFor('casa');
-    expect(casa.beats[0]?.roles).toEqual(['ambience']);
+    expect(casa.beats[0]?.roles).toEqual(['food', 'master', 'ambience', 'side']);
     expect(casa.join).toBe('dissolve');
+    expect(casa.beats[0]?.motion).toBe('none');
     expect(casa.beats.some((beat) => beat.roles.includes('food') && beat.punchIn)).toBe(true);
   });
 
@@ -65,9 +67,39 @@ describe('validated four-program standard', () => {
     const fake = renderEffectCatalog.filter((item) => item.status === 'architecture');
     expect(real.some((item) => item.id === 'cut')).toBe(true);
     expect(real.some((item) => item.id === 'overlay-flash')).toBe(true);
+    expect(real.some((item) => item.id === 'title')).toBe(true);
+    expect(real.some((item) => item.id === 'logo')).toBe(true);
+    expect(real.some((item) => item.id === 'cta')).toBe(true);
+    expect(real.some((item) => item.id === 'end-card')).toBe(true);
     expect(fake.some((item) => item.id === 'masked_reveal')).toBe(true);
     expect(fake.some((item) => item.id === 'overlay-alpha-pack')).toBe(true);
     expect(real.some((item) => item.id === 'masked_reveal')).toBe(false);
+  });
+
+  it('burns title and logo on every validated program', () => {
+    for (const program of ['casa', 'oficio', 'assinatura', 'pulso'] as const) {
+      expect(validatedProgramPresets[program].branding.title).toBe(true);
+      expect(validatedProgramPresets[program].branding.logo).toBe(true);
+      expect(validatedProgramPresets[program].branding.endCard).toBe(true);
+    }
+    expect(validatedProgramPresets.oficio.branding.lowerThird).toBe(true);
+    expect(validatedProgramPresets.pulso.branding.cta).toBe(true);
+  });
+
+  it('builds partner copy from the restaurant name', () => {
+    const copy = programBrandCopy({ restaurantName: 'Trattoria Luna', program: 'casa' });
+    expect(copy.title).toBe('Trattoria Luna');
+    expect(copy.wordmark).toBe('TL');
+    expect(copy.cta).toBe('Peça no salão');
+  });
+
+  it('fills title and logo when an old published spec omitted branding', () => {
+    const { branding, ...legacy } = validatedProgramPresets.casa;
+    expect(branding.title).toBe(true);
+    const parsed = programPresetSpecSchema.parse(legacy);
+    expect(parsed.branding.title).toBe(true);
+    expect(parsed.branding.logo).toBe(true);
+    expect(parsed.branding.endCard).toBe(true);
   });
 
   it('accepts a transparent overlay sitting on a join', () => {

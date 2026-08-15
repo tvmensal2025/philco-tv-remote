@@ -15,7 +15,7 @@ export async function POST(request: Request) {
   try {
     const ctx = await requireContext();
     requireRole(ctx.role, ['owner', 'admin', 'editor']);
-    await enforceRateLimit(`moments:${ctx.tenantId}:${ctx.user.id}`, 10, 60);
+    await enforceRateLimit(`moments:${ctx.tenantId}:${ctx.user.id}`, 10, 60, { failClosed: true });
     const input = markMomentSchema.parse(await request.json());
     const { data: restaurant } = await ctx.supabase
       .from('restaurants')
@@ -157,14 +157,12 @@ export async function POST(request: Request) {
           .single();
         if (reelError || !reel) throw reelError ?? new Error('REEL_INSERT');
         created.push(reel);
-        await admin
-          .from('job_events')
-          .insert({
-            tenant_id: ctx.tenantId,
-            reel_id: reel.id,
-            status: 'queued',
-            message: `Programa ${editProgramLabels[program]}`,
-          });
+        await admin.from('job_events').insert({
+          tenant_id: ctx.tenantId,
+          reel_id: reel.id,
+          status: 'queued',
+          message: `Programa ${editProgramLabels[program]}`,
+        });
         await videoQueue().add(
           'render-reel',
           {

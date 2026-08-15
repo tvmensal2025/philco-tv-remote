@@ -1,6 +1,6 @@
-import { Worker } from 'bullmq';
-import { calendarDay, clockHour, editPrograms, QUEUES } from '@reelops/shared';
-import { hostname } from 'node:os';
+import { DelayedError, Worker } from 'bullmq';
+import { calendarDay, clockHour, editPrograms, jitterBackoffMs, QUEUES } from '@reelops/shared';
+import { randomUUID } from 'node:crypto';
 import { mkdir, readdir, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { config } from './config.js';
@@ -11,17 +11,34 @@ import { processHighlight } from './pipeline/highlight-job.js';
 import { processDigest } from './pipeline/digest-job.js';
 import { createPublisher } from './adapters/publisher.js';
 import { configuredVisionKind } from './adapters/analyzer.js';
-import { digestJobs, enqueueUnique, indexJobs, videoJobs } from './queues.js';
+import { isYoloConfigured, probeYoloHealth } from './adapters/yolo.js';
+import { digestJobs, enqueueUnique, indexJobs } from './queues.js';
 import { runtimeStatus } from './runtime-status.js';
 import { isRealVisionProvider } from './adapters/vision-provider.js';
 import {
+  classifyQueueHealth,
   IN_FLIGHT_REEL_STATUSES,
-  isLiveQueueJob,
+  isStaleWorkerHeartbeat,
+  lastProgressAtIso,
+  ownerWorkerId,
   planStaleRecovery,
   recoveryCountFromMetadata,
+  videoJobId,
   type StaleReel,
 } from './engine/job-recovery.js';
+import {
+  acquireRecoveryLease,
+  getVideoQueueSnapshot,
+  reclaimOrRetryVideoJob,
+} from './engine/reclaim-video-job.js';
 import { setStatus } from './pipeline/status.js';
+import { workerId } from './worker-id.js';
+import { workerDescriptor } from './engine/worker-descriptor.js';
+import {
+  freeTenantRenderSlot,
+  redisCounterStore,
+  takeTenantRenderSlot,
+} from './engine/tenant-slots.js';
 import { bootstrapStorage } from './storage-lifecycle.js';
 import { SUPABASE_FETCH_TIMEOUT_MS, withTimeout } from './supabase-fetch.js';
 
@@ -33,31 +50,70 @@ await bootstrapStorage({
 });
 await mkdir(config.WORK_DIR, { recursive: true });
 await cleanupStaleWork();
-const workerId = `${hostname()}-${process.pid}`;
 const videoConcurrency = Math.min(
   config.VIDEO_WORKER_CONCURRENCY,
   config.RENDER_WORKER_CONCURRENCY,
   2,
 );
 
-const video = new Worker(QUEUES.video, processVideo, {
-  connection: redis,
-  concurrency: videoConcurrency,
-  lockDuration: 15 * 60 * 1000,
-});
+const tenantSlots = redisCounterStore(redis);
+const video = new Worker(
+  QUEUES.video,
+  async (job, token) => {
+    const tenantId = (job.data as { tenantId?: string } | undefined)?.tenantId;
+    if (typeof tenantId !== 'string') return processVideo(job);
+    let held = false;
+    try {
+      const slot = await takeTenantRenderSlot(
+        tenantSlots,
+        tenantId,
+        config.MAX_RENDER_JOBS_PER_TENANT,
+      );
+      if (!slot.ok) {
+        await job.moveToDelayed(
+          Date.now() +
+            jitterBackoffMs(
+              0,
+              config.TENANT_FAIRNESS_DELAY_MS,
+              config.TENANT_FAIRNESS_DELAY_MS * 2,
+            ),
+          token,
+        );
+        throw new DelayedError();
+      }
+      held = true;
+      return await processVideo(job);
+    } catch (error) {
+      if (error instanceof DelayedError) throw error;
+      const slotError =
+        error instanceof Error && /ECONNREFUSED|ETIMEDOUT|READONLY/i.test(error.message);
+      if (!held && slotError) return processVideo(job);
+      throw error;
+    } finally {
+      if (held) await freeTenantRenderSlot(tenantSlots, tenantId).catch(() => undefined);
+    }
+  },
+  {
+    connection: redis.duplicate(),
+    concurrency: videoConcurrency,
+    lockDuration: 15 * 60 * 1000,
+    stalledInterval: 30_000,
+    maxStalledCount: 2,
+  },
+);
 const index = new Worker(QUEUES.index, processIndex, {
-  connection: redis,
+  connection: redis.duplicate(),
   concurrency: config.INDEX_WORKER_CONCURRENCY,
   lockDuration: 5 * 60 * 1000,
 });
 const highlight = new Worker(QUEUES.highlight, processHighlight, {
-  connection: redis,
+  connection: redis.duplicate(),
   concurrency: config.HIGHLIGHT_WORKER_CONCURRENCY,
   lockDuration: 8 * 60 * 1000,
   limiter: { max: 12, duration: 60_000 },
 });
 const digest = new Worker(QUEUES.digest, processDigest, {
-  connection: redis,
+  connection: redis.duplicate(),
   concurrency: 1,
   lockDuration: 10 * 60 * 1000,
 });
@@ -123,7 +179,7 @@ const publishing = new Worker(
       throw error;
     }
   },
-  { connection: redis, concurrency: 1, lockDuration: 10 * 60 * 1000 },
+  { connection: redis.duplicate(), concurrency: 1, lockDuration: 10 * 60 * 1000 },
 );
 
 async function sweepPendingRecordings() {
@@ -153,53 +209,69 @@ async function sweepPendingRecordings() {
 }
 
 async function reconcileStaleVideoJobs() {
-  const staleBefore = new Date(Date.now() - config.STALE_JOB_MS).toISOString();
   const { data, error } = await db
     .from('reels')
     .select(
       'id,tenant_id,restaurant_id,moment_id,status,updated_at,metadata,moments(occurred_at,window_start,window_end)',
     )
     .in('status', [...IN_FLIGHT_REEL_STATUSES])
-    .lt('updated_at', staleBefore)
-    .limit(20);
+    .limit(40);
   if (error) {
     log.warn({ err: error.message }, 'stale reel query failed');
     return;
   }
   if (!data?.length) return;
-  const inflight = await videoJobs.getJobs(['active', 'waiting', 'delayed', 'paused'], 0, 200);
-  const activeReels = new Set<string>();
-  for (const job of inflight) {
-    const reelId = (job.data as { reelId?: string } | undefined)?.reelId;
-    if (!reelId) continue;
-    const state = await job.getState();
-    const hasLock = Boolean(await redis.exists(`bull:${QUEUES.video}:${job.id}:lock`));
-    if (isLiveQueueJob({ state, hasLock })) {
-      activeReels.add(reelId);
-      continue;
-    }
-    if (state === 'active' && !hasLock) {
-      log.warn({ reel_id: reelId, jobId: job.id }, 'stale active video job without lock');
+
+  const now = Date.now();
+  const ownerIds = [
+    ...new Set(
+      data
+        .map((row) => ownerWorkerId((row.metadata as Record<string, unknown> | null) ?? {}))
+        .filter((id): id is string => Boolean(id)),
+    ),
+  ];
+  const heartbeatByWorker = new Map<string, string | null>();
+  if (ownerIds.length) {
+    const { data: nodes } = await db
+      .from('worker_nodes')
+      .select('id,last_seen_at')
+      .in('id', ownerIds);
+    for (const node of nodes ?? []) {
+      heartbeatByWorker.set(node.id, (node.last_seen_at as string | null) ?? null);
     }
   }
-  for (const row of data ?? []) {
+
+  for (const row of data) {
     const reel = row as unknown as StaleReel & {
       moments?: StaleReel['moments'] | StaleReel['moments'][];
     };
     const moment = Array.isArray(reel.moments) ? reel.moments[0] : reel.moments;
-    const recoveryCount = recoveryCountFromMetadata(reel.metadata);
+    const metadata = (reel.metadata ?? {}) as Record<string, unknown>;
+    const recoveryCount = recoveryCountFromMetadata(metadata);
+    const ownerId = ownerWorkerId(metadata);
+    const ownerWorkerFresh = !isStaleWorkerHeartbeat({
+      lastSeenAt: ownerId ? (heartbeatByWorker.get(ownerId) ?? null) : null,
+      now,
+      staleMs: config.WORKER_HEARTBEAT_STALE_MS,
+    });
+    const snapshot = await getVideoQueueSnapshot(reel.id);
+    const queueHealth = classifyQueueHealth({
+      state: snapshot.state,
+      hasLock: snapshot.hasLock,
+      ownerWorkerFresh,
+    });
     const action = planStaleRecovery({
       status: reel.status,
-      updatedAt: reel.updated_at,
-      now: Date.now(),
+      lastProgressAt: lastProgressAtIso(metadata, reel.updated_at),
+      now,
       staleMs: config.STALE_JOB_MS,
-      hasActiveJob: activeReels.has(reel.id),
+      queueHealth,
       recoveryCount,
       maxRecoveries: config.MAX_JOB_RECOVERIES,
     });
     if (action === 'skip') continue;
     if (!moment) continue;
-    const programRaw = (reel.metadata as { program?: string } | null)?.program;
+    const programRaw = metadata.program;
     const program = editPrograms.includes(programRaw as (typeof editPrograms)[number])
       ? (programRaw as (typeof editPrograms)[number])
       : 'assinatura';
@@ -208,24 +280,39 @@ async function reconcileStaleVideoJobs() {
         error_code: 'STALE_JOB',
         error_message: 'STALE_JOB:max_recoveries',
       });
-      log.warn({ reel_id: reel.id, recoveryCount }, 'stale job failed after recovery cap');
+      log.warn(
+        { reel_id: reel.id, recoveryCount, queueHealth },
+        'stale job failed after recovery cap',
+      );
+      continue;
+    }
+    if (action !== 'reclaim' && action !== 'requeue') continue;
+    const leased = await acquireRecoveryLease(reel.id);
+    if (!leased) {
+      log.info({ reel_id: reel.id, queueHealth, action }, 'recovery lease held by another worker');
       continue;
     }
     const nextCount = recoveryCount + 1;
+    const reclaimToken = randomUUID();
     await setStatus(reel.tenant_id, reel.id, 'queued', 5, 'Recuperando job interrompido', {
       error_code: 'STALE_JOB',
       error_message: 'STALE_JOB:requeued',
       metadata: {
-        ...(reel.metadata ?? {}),
+        ...metadata,
         program,
         recovery_count: nextCount,
         recovery_reason: 'STALE_JOB',
+        recovery_action: action,
+        logical_job_id: videoJobId(reel.id),
+        execution_id: `reclaim:${reclaimToken}`,
+        owner_worker_id: null,
+        stale_detected_at: new Date().toISOString(),
       },
     });
-    const queued = await enqueueUnique(
-      videoJobs,
-      'render-reel',
-      {
+    const result = await reclaimOrRetryVideoJob({
+      reelId: reel.id,
+      action,
+      payload: {
         jobId: reel.id,
         tenantId: reel.tenant_id,
         restaurantId: reel.restaurant_id,
@@ -236,9 +323,20 @@ async function reconcileStaleVideoJobs() {
         windowEnd: new Date(moment.window_end).toISOString(),
         program,
       },
-      `${reel.id}-recover-${nextCount}`,
+    });
+    log.warn(
+      {
+        reel_id: reel.id,
+        logical_job_id: videoJobId(reel.id),
+        recoveryCount: nextCount,
+        queueHealth,
+        action,
+        method: result.method,
+        jobId: result.jobId,
+        ok: result.ok,
+      },
+      'stale job recovered',
     );
-    log.warn({ reel_id: reel.id, recoveryCount: nextCount, queued }, 'stale job requeued');
   }
 }
 
@@ -266,11 +364,14 @@ async function sweepDailyDigests() {
 }
 
 let heartbeatInFlight = false;
+let heartbeatCount = 0;
 
 async function heartbeat() {
   if (heartbeatInFlight) return;
   heartbeatInFlight = true;
+  heartbeatCount += 1;
   const now = new Date().toISOString();
+  const descriptor = workerDescriptor();
   const controller = new AbortController();
   const abortTimer = setTimeout(() => controller.abort(), SUPABASE_FETCH_TIMEOUT_MS);
   try {
@@ -281,7 +382,9 @@ async function heartbeat() {
           id: workerId,
           last_seen_at: now,
           metadata: {
-            hostname: hostname(),
+            ...descriptor,
+            heartbeatAt: now,
+            hostname: descriptor.hostname,
             video: videoConcurrency,
             index: config.INDEX_WORKER_CONCURRENCY,
             highlight: config.HIGHLIGHT_WORKER_CONCURRENCY,
@@ -301,6 +404,7 @@ async function heartbeat() {
             vision_real: isRealVisionProvider(configuredVisionKind()),
             visionCredential: configuredVisionKind() === 'heuristic' ? 'missing' : 'configured',
             rawLifecycle: runtimeStatus.rawLifecycle,
+            yolo: runtimeStatus.yolo,
           },
         })
         .abortSignal(controller.signal),
@@ -308,8 +412,28 @@ async function heartbeat() {
       'heartbeat upsert',
     )) as { error: { message: string } | null };
     if (result.error) throw new Error(result.error.message);
+    if (isYoloConfigured() && heartbeatCount % 2 === 1) {
+      const yolo = await probeYoloHealth();
+      runtimeStatus.yolo = {
+        ok: yolo.ok,
+        loaded: yolo.loaded,
+        device: yolo.device,
+        reason: yolo.reason ?? (yolo.ok ? 'ok' : 'unhealthy'),
+      };
+    }
     await writeFile(path.join(config.WORK_DIR, 'worker-alive'), now, 'utf8');
-    log.info({ workerId }, 'heartbeat ok');
+    if (heartbeatCount % 5 === 0) {
+      const memory = process.memoryUsage();
+      log.info(
+        { workerId, rss: memory.rss, heapUsed: memory.heapUsed, external: memory.external },
+        'worker memory',
+      );
+    }
+    if (heartbeatCount % 20 === 0) {
+      const cutoff = new Date(Date.now() - config.WORKER_NODE_TTL_HOURS * 3_600_000).toISOString();
+      await db.from('worker_nodes').delete().lt('last_seen_at', cutoff).neq('id', workerId);
+    }
+    log.info({ workerId, environment: descriptor.environment }, 'heartbeat ok');
   } finally {
     clearTimeout(abortTimer);
     heartbeatInFlight = false;
@@ -403,6 +527,11 @@ async function shutdown() {
   clearInterval(heartbeatTimer);
   clearInterval(sweepTimer);
   log.info('shutting down');
+  const force = setTimeout(() => {
+    log.warn('shutdown timed out');
+    process.exit(1);
+  }, 25_000);
+  force.unref();
   await Promise.all([
     video.close(),
     index.close(),
@@ -412,6 +541,7 @@ async function shutdown() {
   ]);
   await db.from('worker_nodes').delete().eq('id', workerId);
   await redis.quit();
+  clearTimeout(force);
   process.exit(0);
 }
 process.on('SIGTERM', shutdown);

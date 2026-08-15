@@ -342,3 +342,6 @@ export * from './render-manifest.js';
 export * from './storage.js';
 export * from './program-preset.js';
 export * from './program-timeline.js';
+export * from './scale.js';
+export * from './quality-first.js';
+export * from './scene-coherence.js';

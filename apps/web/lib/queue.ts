@@ -1,4 +1,4 @@
-import { Queue } from 'bullmq';
+import { Queue, type JobsOptions } from 'bullmq';
 import { Redis as IORedis } from 'ioredis';
 import {
   QUEUES,
@@ -41,7 +41,39 @@ function resetRedisClients() {
   }
 }
 
+async function waitUntilReady(redis: IORedis, timeoutMs: number) {
+  if (redis.status === 'ready') return;
+  await Promise.race([
+    (async () => {
+      if (redis.status === 'wait' || redis.status === 'end' || redis.status === 'close') {
+        await redis.connect();
+      }
+      if (redis.status === 'ready') return;
+      await new Promise<void>((resolve, reject) => {
+        if (redis.status === 'ready') {
+          resolve();
+          return;
+        }
+        const onReady = () => {
+          redis.off('error', onError);
+          resolve();
+        };
+        const onError = (error: Error) => {
+          redis.off('ready', onReady);
+          reject(error);
+        };
+        redis.once('ready', onReady);
+        redis.once('error', onError);
+      });
+    })(),
+    new Promise<never>((_, reject) => {
+      setTimeout(() => reject(new Error('QUEUE_UNAVAILABLE')), timeoutMs);
+    }),
+  ]);
+}
+
 async function pingRedis(redis: IORedis, timeoutMs: number) {
+  await waitUntilReady(redis, timeoutMs);
   const result = await Promise.race([
     redis.ping(),
     new Promise<never>((_, reject) => {
@@ -89,4 +121,35 @@ export function highlightQueue() {
 export function digestQueue() {
   digestQueueClient ??= new Queue<DigestJob>(QUEUES.digest, { connection: redisConnection() });
   return digestQueueClient;
+}
+
+export async function enqueueStableVideoJob(data: VideoJob, extra: JobsOptions = {}) {
+  const queue = videoQueue();
+  const jobId = data.reelId;
+  const existing = await queue.getJob(jobId);
+  if (existing) {
+    const state = await existing.getState();
+    if (
+      state === 'waiting' ||
+      state === 'delayed' ||
+      state === 'active' ||
+      state === 'prioritized'
+    ) {
+      return { ok: true as const, method: 'exists' as const, jobId };
+    }
+    try {
+      await existing.remove();
+    } catch {
+      /* already consumed */
+    }
+  }
+  await queue.add('render-reel', data, {
+    jobId,
+    attempts: 8,
+    backoff: { type: 'exponential', delay: 10_000 },
+    removeOnComplete: { age: 24 * 3600, count: 1000 },
+    removeOnFail: { age: 7 * 24 * 3600, count: 5000 },
+    ...extra,
+  });
+  return { ok: true as const, method: 'enqueue' as const, jobId };
 }

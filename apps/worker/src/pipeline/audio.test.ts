@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { assertLicensedMusic, duckingFilter, mixVoiceoverGraph } from './audio.js';
+import {
+  assertLicensedMusic,
+  deliveryAudioEncodeArgs,
+  deliveryAudioFilter,
+  duckingFilter,
+  mixVoiceoverGraph,
+} from './audio.js';
 
 describe('audio architecture', () => {
   it('builds a sidechain ducking graph without a shell string', () => {
@@ -18,6 +24,7 @@ describe('audio architecture', () => {
     });
     expect(graph).toContain('[0:a]atrim=start=1.5:duration=12');
     expect(graph).toContain('[3:a]aresample=48000');
+    expect(graph).toContain('aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo');
     expect(graph).toContain('asplit=2');
     expect(graph).toContain('sidechaincompress');
     expect(graph).toContain('loudnorm=I=-16');
@@ -28,7 +35,23 @@ describe('audio architecture', () => {
     const graph = mixVoiceoverGraph({ voiceInputIndex: 2, duration: 8 });
     expect(graph).not.toContain('sidechaincompress');
     expect(graph).toContain('[2:a]aresample=48000');
+    expect(graph).toContain('channel_layouts=stereo');
     expect(graph).toContain('[outa]');
+  });
+
+  it('locks delivery audio to AAC 48 kHz stereo', () => {
+    expect(deliveryAudioFilter()).toContain('aresample=48000');
+    expect(deliveryAudioFilter()).toContain('channel_layouts=stereo');
+    expect([...deliveryAudioEncodeArgs()]).toEqual([
+      '-c:a',
+      'aac',
+      '-ar',
+      '48000',
+      '-ac',
+      '2',
+      '-b:a',
+      '192k',
+    ]);
   });
 
   it('refuses music with an unknown license', () => {

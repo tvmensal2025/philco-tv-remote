@@ -15,10 +15,11 @@ pasta do NVR (watch, original intacto)
 
 ## READY vs HEALTH
 
-| Endpoint          | Significado                                                                                                                              |
-| ----------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
-| `GET /api/ready`  | O processo Next aceita tráfego HTTP. Não testa Redis/MinIO/FFmpeg.                                                                       |
-| `GET /api/health` | Dependências: Supabase, Redis, MinIO, Worker heartbeat, FFmpeg (`ffprobe -version` com timeout), VisionProvider, aviso de lifecycle raw. |
+| Endpoint          | Significado                                                                                                          |
+| ----------------- | -------------------------------------------------------------------------------------------------------------------- |
+| `GET /api/live`   | Processo vivo.                                                                                                       |
+| `GET /api/ready`  | O processo Next aceita tráfego HTTP. Não testa Redis/MinIO/FFmpeg.                                                   |
+| `GET /api/health` | Dependências: Supabase, Redis, MinIO, fila, census de workers **por environment**. FFmpeg no host web é informativo. |
 
 Orquestração Docker: liveness/readiness → `/api/ready`. Alerta de casa → `/api/health`.
 

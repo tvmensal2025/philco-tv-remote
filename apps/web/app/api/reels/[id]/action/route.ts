@@ -1,8 +1,7 @@
 import { NextResponse } from 'next/server';
 import { editPrograms, reelActionSchema } from '@reelops/shared';
 import { requireContext, requireRole, adminClient } from '@/lib/supabase';
-import { assertQueueAvailable, videoQueue } from '@/lib/queue';
-import { publishingQueue } from '@/lib/queue';
+import { assertQueueAvailable, enqueueStableVideoJob, publishingQueue } from '@/lib/queue';
 import { hasInstagramPublisher, isAuthBypass } from '@/lib/env';
 import { enforceRateLimit } from '@/lib/rate-limit';
 
@@ -10,7 +9,9 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
   try {
     const ctx = await requireContext();
     requireRole(ctx.role, ['owner', 'admin', 'editor']);
-    await enforceRateLimit(`reel-actions:${ctx.tenantId}:${ctx.user.id}`, 30, 60);
+    await enforceRateLimit(`reel-actions:${ctx.tenantId}:${ctx.user.id}`, 30, 60, {
+      failClosed: true,
+    });
     const { id } = await params;
     const input = reelActionSchema.parse(await request.json());
     const { data: reel } = await ctx.supabase
@@ -98,16 +99,14 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
         .eq('tenant_id', ctx.tenantId)
         .eq('status', 'ready');
       if (error) throw error;
-      await admin
-        .from('activity_events')
-        .insert({
-          tenant_id: ctx.tenantId,
-          restaurant_id: reel.restaurant_id,
-          event_type: 'reel.approved',
-          entity_type: 'reel',
-          entity_id: id,
-          message: 'Reel aprovado',
-        });
+      await admin.from('activity_events').insert({
+        tenant_id: ctx.tenantId,
+        restaurant_id: reel.restaurant_id,
+        event_type: 'reel.approved',
+        entity_type: 'reel',
+        entity_id: id,
+        message: 'Reel aprovado',
+      });
     }
     if (input.action === 'discard') {
       if (!['ready', 'approved', 'failed'].includes(reel.status))
@@ -121,16 +120,14 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
         .eq('id', id)
         .eq('tenant_id', ctx.tenantId);
       if (error) throw error;
-      await admin
-        .from('activity_events')
-        .insert({
-          tenant_id: ctx.tenantId,
-          restaurant_id: reel.restaurant_id,
-          event_type: 'reel.discarded',
-          entity_type: 'reel',
-          entity_id: id,
-          message: 'Reel descartado',
-        });
+      await admin.from('activity_events').insert({
+        tenant_id: ctx.tenantId,
+        restaurant_id: reel.restaurant_id,
+        event_type: 'reel.discarded',
+        entity_type: 'reel',
+        entity_id: id,
+        message: 'Reel descartado',
+      });
     }
     if (input.action === 'retry') {
       if (reel.status !== 'failed')
@@ -148,27 +145,17 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
         ? (metadata.program as (typeof editPrograms)[number])
         : ('assinatura' as const);
       await assertQueueAvailable();
-      await videoQueue().add(
-        'render-reel',
-        {
-          jobId: reel.id,
-          tenantId: reel.tenant_id,
-          restaurantId: reel.restaurant_id,
-          momentId: reel.moment_id,
-          reelId: reel.id,
-          occurredAt: new Date(moment.occurred_at).toISOString(),
-          windowStart: new Date(moment.window_start).toISOString(),
-          windowEnd: new Date(moment.window_end).toISOString(),
-          program,
-        },
-        {
-          jobId: `${reel.id}-retry-${Date.now()}`,
-          attempts: 8,
-          backoff: { type: 'exponential', delay: 10_000 },
-          removeOnComplete: 1000,
-          removeOnFail: 5000,
-        },
-      );
+      await enqueueStableVideoJob({
+        jobId: reel.id,
+        tenantId: reel.tenant_id,
+        restaurantId: reel.restaurant_id,
+        momentId: reel.moment_id,
+        reelId: reel.id,
+        occurredAt: new Date(moment.occurred_at).toISOString(),
+        windowStart: new Date(moment.window_start).toISOString(),
+        windowEnd: new Date(moment.window_end).toISOString(),
+        program,
+      });
       const { error } = await admin
         .from('reels')
         .update({ status: 'queued', progress: 0, error_code: null, error_message: null })
@@ -176,16 +163,14 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
         .eq('tenant_id', ctx.tenantId)
         .eq('status', 'failed');
       if (error) throw error;
-      await admin
-        .from('activity_events')
-        .insert({
-          tenant_id: ctx.tenantId,
-          restaurant_id: reel.restaurant_id,
-          event_type: 'reel.queued',
-          entity_type: 'reel',
-          entity_id: id,
-          message: 'Reprocessamento solicitado',
-        });
+      await admin.from('activity_events').insert({
+        tenant_id: ctx.tenantId,
+        restaurant_id: reel.restaurant_id,
+        event_type: 'reel.queued',
+        entity_type: 'reel',
+        entity_id: id,
+        message: 'Reprocessamento solicitado',
+      });
     }
     return NextResponse.json({ ok: true });
   } catch (error) {

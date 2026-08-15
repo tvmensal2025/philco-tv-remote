@@ -1,4 +1,10 @@
-import { JOIN_OVERLAY, resolvedJoinOverlay } from '@reelops/shared';
+import {
+  FACTORY_BRANDING,
+  JOIN_OVERLAY,
+  cropNeedsPadBlur,
+  isDeliverySourceCrop,
+  resolvedJoinOverlay,
+} from '@reelops/shared';
 
 export type JoinName = 'cut' | 'dissolve' | 'fadeblack' | 'fadein';
 export type MotionName = 'none' | 'drift' | 'punch';
@@ -39,58 +45,87 @@ export function joinedDuration(
   return Number(elapsed.toFixed(3));
 }
 
-export function ffmpegSourceCrop(bbox?: number[] | null) {
-  if (!bbox || bbox.length !== 4) return '';
+type TakeScene = {
+  source_start_offset: number;
+  duration: number;
+  fadeIn?: boolean;
+  punchIn?: boolean;
+  role?: string;
+  motion?: MotionName;
+  crop?: number[];
+  cropMode?: 'crop' | 'pad_blur';
+  cropTight?: boolean;
+  cropFilter?: string;
+  shotStyle?: string;
+};
+
+export function ffmpegSourceCrop(bbox?: number[] | null, cropFilter?: string) {
+  if (cropFilter) return cropFilter.endsWith(',') ? cropFilter : `${cropFilter},`;
+  if (!isDeliverySourceCrop(bbox) || !bbox) return '';
   const [x, y, w, h] = bbox.map((value) => Math.round(Number(value)));
-  if (![x, y, w, h].every((value) => Number.isFinite(value)) || x < 0 || y < 0 || w < 16 || h < 16)
-    return '';
-  return `crop=${w}:${h}:${x}:${y},`;
+  if (![x, y, w, h].every((value) => Number.isFinite(value)) || x < 0 || y < 0) return '';
+  const xx = x % 2 === 0 ? x : x - 1;
+  const yy = y % 2 === 0 ? y : y - 1;
+  const ww = w % 2 === 0 ? w : w - 1;
+  const hh = h % 2 === 0 ? h : h - 1;
+  if (xx < 0 || yy < 0 || ww < 16 || hh < 16) return '';
+  return `crop=${ww}:${hh}:${xx}:${yy},`;
 }
 
-export function takeFilter(
-  scene: {
-    source_start_offset: number;
-    duration: number;
-    fadeIn?: boolean;
-    punchIn?: boolean;
-    role?: string;
-    motion?: MotionName;
-    crop?: number[];
-  },
-  index: number,
-) {
+const GRADE =
+  'eq=contrast=1.06:brightness=0.01:saturation=1.08:gamma=0.99,colorbalance=rs=0.05:gs=0.015:bs=-0.035:rm=0.03:bm=-0.025';
+
+function padBlurGraph(scene: TakeScene, index: number, duration: number, grade: string) {
+  const crop = ffmpegSourceCrop(scene.crop).replace(/,$/, '');
+  const split = crop ? `${crop},split` : 'split';
+  const fadeIn = scene.fadeIn ? ',fade=t=in:st=0:d=0.7:color=black' : '';
+  return [
+    `[${index}:v]trim=start=${scene.source_start_offset}:duration=${duration},setpts=PTS-STARTPTS,${split}[fg${index}][bg${index}]`,
+    `[bg${index}]scale=270:480:force_original_aspect_ratio=increase,crop=270:480,gblur=sigma=16,scale=1080:1920,eq=brightness=-0.08:saturation=0.82[bg${index}b]`,
+    `[fg${index}]scale=1080:1920:force_original_aspect_ratio=decrease[fg${index}s]`,
+    `[bg${index}b][fg${index}s]overlay=(W-w)/2:(H-h)/2,${grade},fps=30,setsar=1,format=yuv420p${fadeIn}[v${index}]`,
+  ].join(';');
+}
+
+function lockedVerticalScale(sourceCrop: string) {
+  return `${sourceCrop}scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920`;
+}
+
+export function takeFilter(scene: TakeScene, index: number) {
   const duration = Math.max(0.8, scene.duration);
-  const motion =
-    scene.motion ?? (scene.punchIn ? 'punch' : scene.role === 'ambience' ? 'drift' : 'none');
-  const sourceCrop = ffmpegSourceCrop(scene.crop);
-  // HIGH profile: eval=frame Ken Burns at 1480×2631 / 1296×2304 plus xfade is the KVM4 OOM path.
+  const grade = GRADE;
+  if (cropNeedsPadBlur(scene)) return padBlurGraph(scene, index, duration, grade);
+  const tight = Boolean(scene.cropTight);
+  const motion = tight
+    ? 'none'
+    : (scene.motion ?? (scene.punchIn ? 'punch' : scene.role === 'ambience' ? 'drift' : 'none'));
+  const sourceCrop = ffmpegSourceCrop(scene.crop, scene.cropFilter);
   const reframe =
     motion === 'punch'
       ? `${sourceCrop}scale=1480:2631:force_original_aspect_ratio=increase,crop=1480:2631,scale='1480*(1+0.11*t/${duration})':'2631*(1+0.11*t/${duration})':eval=frame,crop=1080:1920`
       : motion === 'drift'
         ? `${sourceCrop}scale=1296:2304:force_original_aspect_ratio=increase,crop=1296:2304,scale='1296*(1+0.07*t/${duration})':'2304*(1+0.07*t/${duration})':eval=frame,crop=1080:1920`
-        : `${sourceCrop}scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920`;
+        : lockedVerticalScale(sourceCrop);
   const fadeIn = scene.fadeIn ? ',fade=t=in:st=0:d=0.7:color=black' : '';
-  return `[${index}:v]trim=start=${scene.source_start_offset}:duration=${duration},setpts=PTS-STARTPTS,${reframe},eq=contrast=1.08:brightness=0.028:saturation=1.14:gamma=0.98,colorbalance=rs=0.06:gs=0.02:bs=-0.045:rm=0.035:bm=-0.03,fps=30,setsar=1,format=yuv420p${fadeIn}[v${index}]`;
+  return `[${index}:v]trim=start=${scene.source_start_offset}:duration=${duration},setpts=PTS-STARTPTS,${reframe},${grade},fps=30,setsar=1,format=yuv420p${fadeIn}[v${index}]`;
 }
 
-export function takeFilterStatic(
-  scene: {
-    source_start_offset: number;
-    duration: number;
-    fadeIn?: boolean;
-    punchIn?: boolean;
-    crop?: number[];
-  },
-  index: number,
-) {
+export function takeFilterStatic(scene: TakeScene, index: number) {
   const duration = Math.max(0.8, scene.duration);
-  const sourceCrop = ffmpegSourceCrop(scene.crop);
-  const punch = scene.punchIn
-    ? `${sourceCrop}scale=1240:2204:force_original_aspect_ratio=increase,crop=1080:1920`
-    : `${sourceCrop}scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920`;
+  const grade = GRADE;
+  if (cropNeedsPadBlur(scene)) return padBlurGraph(scene, index, duration, grade);
+  const sourceCrop = ffmpegSourceCrop(scene.crop, scene.cropFilter);
+  const style = scene.shotStyle;
+  const tight = Boolean(scene.cropTight);
+  const punch = tight
+    ? lockedVerticalScale(sourceCrop)
+    : scene.punchIn || style === 'punch_in'
+      ? `${sourceCrop}scale=1240:2204:force_original_aspect_ratio=increase,crop=1080:1920`
+      : style === 'slow_push' || style === 'cinematic_food_closeup' || style === 'hero_reveal'
+        ? `${sourceCrop}scale=1188:2112:force_original_aspect_ratio=increase,crop=1188:2112,scale='1188*(1+0.055*t/${duration})':'2112*(1+0.055*t/${duration})':eval=frame,crop=1080:1920`
+        : lockedVerticalScale(sourceCrop);
   const fadeIn = scene.fadeIn ? ',fade=t=in:st=0:d=0.7:color=black' : '';
-  return `[${index}:v]trim=start=${scene.source_start_offset}:duration=${duration},setpts=PTS-STARTPTS,${punch},eq=contrast=1.08:brightness=0.028:saturation=1.14:gamma=0.98,fps=30,setsar=1,format=yuv420p${fadeIn}[v${index}]`;
+  return `[${index}:v]trim=start=${scene.source_start_offset}:duration=${duration},setpts=PTS-STARTPTS,${punch},${grade},fps=30,setsar=1,format=yuv420p${fadeIn}[v${index}]`;
 }
 
 export function xfadeChain(
@@ -173,4 +208,14 @@ export function masterFinish(
   if (!fadeOut || duration < 1.2) return `[${input}]${grade}[basev]`;
   const start = Math.max(0, Number((duration - 0.85).toFixed(3)));
   return `[${input}]${grade},fade=t=out:st=${start}:d=0.85:color=black[basev]`;
+}
+
+export function logoOverlayFilter(videoMap: string, logoInputIndex: number) {
+  const { x, y, size } = FACTORY_BRANDING.logo;
+  return `[${logoInputIndex}:v]format=rgba,scale=${size}:${size}:force_original_aspect_ratio=decrease,pad=${size}:${size}:(ow-iw)/2:(oh-ih)/2:color=0x00000000[logo];${videoMap}[logo]overlay=${x}:${y}:format=auto[logov]`;
+}
+
+export function endCardPlateFilter(videoMap: string, duration: number) {
+  const start = Math.max(0, duration - FACTORY_BRANDING.endCard.duration);
+  return `color=c=0x0a0a0a@0.72:s=1080x1920:d=${duration},format=yuva420p,fade=t=in:st=${start}:d=0.28:alpha=1[endplate];${videoMap}[endplate]overlay=0:0:enable='gte(t,${start.toFixed(3)})'[endv]`;
 }

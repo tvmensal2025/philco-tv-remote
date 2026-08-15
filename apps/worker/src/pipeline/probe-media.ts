@@ -14,6 +14,7 @@ type FfprobeJson = {
     r_frame_rate?: string;
     sample_rate?: string;
     channels?: number;
+    channel_layout?: string;
   }>;
 };
 
@@ -53,6 +54,7 @@ export async function probeMedia(file: string): Promise<MediaProbe> {
           codec: audio.codec_name,
           sampleRate: audio.sample_rate ? Number(audio.sample_rate) : undefined,
           channels: audio.channels,
+          channelLayout: audio.channel_layout,
         }
       : null,
   };

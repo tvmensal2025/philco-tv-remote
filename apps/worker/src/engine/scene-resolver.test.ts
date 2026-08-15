@@ -4,6 +4,7 @@ import { decisionFromReelPlan } from './director.js';
 import {
   applyResolvedTimeline,
   directorCandidatesFromClips,
+  preferExploredSingleCameraTimeline,
   repairDirectorReferences,
   resolveTimeline,
 } from './scene-resolver.js';
@@ -88,7 +89,7 @@ describe('SceneResolver', () => {
     expect(plan.scenes[0]?.camera_id).toBe(clips[0]!.cameraId);
   });
 
-  it('rejects a camera UUID that is not in the candidate set', () => {
+  it('snaps an invented camera UUID onto a compatible candidate instead of aborting', () => {
     const candidates = directorCandidatesFromClips(clips);
     const v1 = decisionFromReelPlan(plan, {
       tenantId: '11111111-1111-1111-1111-111111111111',
@@ -99,6 +100,153 @@ describe('SceneResolver', () => {
     const v2 = adaptVideoEditDecisionV1ToV2(v1);
     v2.scenes[0]!.cameraId = '99999999-9999-4999-8999-999999999999';
     v2.scenes[0]!.recordingId = '99999999-9999-4999-8999-999999999999';
-    expect(() => repairDirectorReferences(v2, candidates)).toThrow(/DIRECTOR_INVALID_REFERENCE/);
+    v2.scenes[0]!.cameraPosition = 1;
+    const repaired = repairDirectorReferences(v2, candidates);
+    expect(repaired.scenes[0]?.cameraId).toBe(clips[0]!.cameraId);
+    expect(repaired.scenes[0]?.recordingId).toBe(clips[0]!.recordingId);
+  });
+
+  it('does not reintroduce a rejected camera that is missing from the candidate set', () => {
+    const candidates = directorCandidatesFromClips([clips[0]!]);
+    const v1 = decisionFromReelPlan(plan, {
+      tenantId: '11111111-1111-1111-1111-111111111111',
+      restaurantId: '22222222-2222-2222-2222-222222222222',
+      momentId: '33333333-3333-3333-3333-333333333333',
+      reelId: '44444444-4444-4444-4444-444444444444',
+    });
+    const v2 = adaptVideoEditDecisionV1ToV2(v1);
+    v2.scenes[0]!.cameraId = 'C4';
+    v2.scenes[0]!.recordingId = '83724128-f29a-4fa7-ba36-94af2f37dc';
+    v2.scenes[0]!.cameraPosition = 4;
+    const repaired = repairDirectorReferences(v2, candidates);
+    expect(repaired.scenes[0]?.cameraId).toBe(clips[0]!.cameraId);
+    expect(repaired.scenes[0]?.recordingId).toBe(clips[0]!.recordingId);
+    expect(repaired.scenes[0]?.cameraPosition).toBe(1);
+  });
+
+  it('accepts a swapped cameraId/recordingId pair', () => {
+    const candidates = directorCandidatesFromClips(clips);
+    const v1 = decisionFromReelPlan(plan, {
+      tenantId: '11111111-1111-1111-1111-111111111111',
+      restaurantId: '22222222-2222-2222-2222-222222222222',
+      momentId: '33333333-3333-3333-3333-333333333333',
+      reelId: '44444444-4444-4444-4444-444444444444',
+    });
+    const v2 = adaptVideoEditDecisionV1ToV2(v1);
+    v2.scenes[0]!.cameraId = clips[0]!.recordingId!;
+    v2.scenes[0]!.recordingId = clips[0]!.cameraId;
+    const repaired = repairDirectorReferences(v2, candidates);
+    expect(repaired.scenes[0]?.cameraId).toBe(clips[0]!.cameraId);
+    expect(repaired.scenes[0]?.recordingId).toBe(clips[0]!.recordingId);
+  });
+
+  it('keeps a spanning director cut on a high-quality single camera', () => {
+    const resolved = {
+      source: 'decision_v2' as const,
+      duration: 20,
+      scenes: [
+        { ...plan.scenes[0]!, source_start_offset: 5, duration: 4.2 },
+        { ...plan.scenes[0]!, source_start_offset: 13, duration: 4 },
+        { ...plan.scenes[0]!, source_start_offset: 22, duration: 3.6 },
+        { ...plan.scenes[0]!, source_start_offset: 31, duration: 3.2 },
+        { ...plan.scenes[0]!, source_start_offset: 37, duration: 5.4 },
+      ],
+    };
+    const playbook = {
+      ...plan,
+      duration: 20,
+      scenes: resolved.scenes,
+    };
+    const result = preferExploredSingleCameraTimeline({
+      editMode: 'single_camera',
+      highQualitySource: true,
+      resolved,
+      playbook,
+      windowDurationSeconds: 38,
+    });
+    expect(result.usedPlaybookExploration).toBe(false);
+    expect(result.timeline.scenes).toHaveLength(5);
+  });
+
+  it('replaces an overlong single-camera dump with the spanning playbook', () => {
+    const resolved = {
+      source: 'decision_v2' as const,
+      duration: 32.8,
+      scenes: [
+        { ...plan.scenes[0]!, source_start_offset: 8, duration: 8 },
+        { ...plan.scenes[0]!, source_start_offset: 16, duration: 9.5 },
+        { ...plan.scenes[0]!, source_start_offset: 26, duration: 9 },
+        { ...plan.scenes[0]!, source_start_offset: 35, duration: 8 },
+      ],
+    };
+    const playbook = {
+      ...plan,
+      duration: 20.4,
+      scenes: [
+        { ...plan.scenes[0]!, source_start_offset: 5, duration: 4.2 },
+        { ...plan.scenes[0]!, source_start_offset: 13.2, duration: 4 },
+        { ...plan.scenes[0]!, source_start_offset: 21.2, duration: 3.6 },
+        { ...plan.scenes[0]!, source_start_offset: 29.6, duration: 3.2 },
+        { ...plan.scenes[0]!, source_start_offset: 37.6, duration: 5.4 },
+      ],
+    };
+    const result = preferExploredSingleCameraTimeline({
+      editMode: 'single_camera',
+      highQualitySource: true,
+      resolved,
+      playbook,
+      windowDurationSeconds: 38,
+    });
+    expect(result.usedPlaybookExploration).toBe(true);
+    expect(result.timeline.scenes).toHaveLength(5);
+    expect(result.timeline.duration).toBe(20.4);
+  });
+
+  it('uses the spanning playbook when a high-quality single-camera director clusters at the start', () => {
+    const resolved = {
+      source: 'decision_v2' as const,
+      duration: 12.2,
+      scenes: [
+        { ...plan.scenes[0]!, source_start_offset: 5, duration: 4.2 },
+        { ...plan.scenes[0]!, source_start_offset: 9.2, duration: 3.8 },
+        { ...plan.scenes[0]!, source_start_offset: 13, duration: 4.75 },
+      ],
+    };
+    const playbook = {
+      ...plan,
+      duration: 20.4,
+      scenes: [
+        { ...plan.scenes[0]!, source_start_offset: 5, duration: 4.2 },
+        { ...plan.scenes[0]!, source_start_offset: 13.2, duration: 4 },
+        { ...plan.scenes[0]!, source_start_offset: 21.2, duration: 3.6 },
+        { ...plan.scenes[0]!, source_start_offset: 29.6, duration: 3.2 },
+        { ...plan.scenes[0]!, source_start_offset: 37.6, duration: 5.4 },
+      ],
+    };
+    const result = preferExploredSingleCameraTimeline({
+      editMode: 'single_camera',
+      highQualitySource: true,
+      resolved,
+      playbook,
+      windowDurationSeconds: 38,
+    });
+    expect(result.usedPlaybookExploration).toBe(true);
+    expect(result.timeline.scenes).toHaveLength(5);
+    expect(result.timeline.scenes.at(-1)?.source_start_offset).toBeGreaterThan(20);
+  });
+
+  it('keeps the YOLO crop after the director replaces the timeline', () => {
+    const withCrop: ReelPlan = {
+      ...plan,
+      scenes: [{ ...plan.scenes[0]!, crop: [320, 0, 405, 720], cropMode: 'crop', cropTight: true }],
+    };
+    const resolved = {
+      source: 'decision_v2' as const,
+      duration: 4.2,
+      scenes: [{ ...plan.scenes[0]!, duration: 4.2 }],
+    };
+    const render = applyResolvedTimeline(withCrop, resolved);
+    expect(render.scenes[0]?.crop).toEqual([320, 0, 405, 720]);
+    expect(render.scenes[0]?.cropTight).toBe(true);
   });
 });

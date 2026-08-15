@@ -3,7 +3,12 @@ import { getServerEnv } from './env';
 
 let connection: Redis | undefined;
 
-export async function enforceRateLimit(key: string, limit: number, windowSeconds: number) {
+export async function enforceRateLimit(
+  key: string,
+  limit: number,
+  windowSeconds: number,
+  options: { failClosed?: boolean } = {},
+) {
   try {
     const env = getServerEnv();
     connection ??= new Redis(env.REDIS_URL, {
@@ -24,5 +29,6 @@ export async function enforceRateLimit(key: string, limit: number, windowSeconds
   } catch (error) {
     if (error instanceof Error && error.message === 'RATE_LIMITED') throw error;
     connection = undefined;
+    if (options.failClosed) throw new Error('RATE_LIMITED');
   }
 }

@@ -1,5 +1,11 @@
 import { spawn } from 'node:child_process';
 import { Redis } from 'ioredis';
+import {
+  censusWorkers,
+  oldestWaitingAgeSeconds,
+  queuePressure,
+  workerHealthOk,
+} from '@reelops/shared';
 import { adminClient } from '@/lib/supabase';
 import { ensureStorage } from '@/lib/storage';
 import { getConfigItems, getServerEnv } from '@/lib/env';
@@ -66,24 +72,50 @@ export async function collectHealthChecks() {
     redis?.disconnect();
   }
   try {
-    const counts = await videoQueue().getJobCounts('wait', 'active', 'completed', 'failed');
+    const counts = await videoQueue().getJobCounts(
+      'wait',
+      'active',
+      'delayed',
+      'completed',
+      'failed',
+    );
+    const waiting = await videoQueue().getJobs(['wait', 'delayed'], 0, 24);
+    const oldestAge = oldestWaitingAgeSeconds(waiting.map((job) => job.timestamp));
+    const pressure = queuePressure({
+      waiting: counts.wait ?? 0,
+      active: counts.active ?? 0,
+      oldestAgeSeconds: oldestAge,
+      workerSlots: 2,
+    });
     checks.bullmq = {
       ok: true,
-      detail: `wait=${counts.wait ?? 0} active=${counts.active ?? 0} failed=${counts.failed ?? 0}`,
+      detail: `wait=${counts.wait ?? 0} active=${counts.active ?? 0} delayed=${counts.delayed ?? 0} failed=${counts.failed ?? 0} oldest=${oldestAge}s pressure=${pressure.pressure}`,
     };
   } catch (error) {
     checks.bullmq = { ok: false, detail: error instanceof Error ? error.message : 'Erro' };
   }
+  let workersCensus: ReturnType<typeof censusWorkers> | null = null;
   try {
     const { data } = await adminClient()
       .from('worker_nodes')
-      .select('last_seen_at,metadata')
+      .select('id,last_seen_at,metadata')
       .order('last_seen_at', { ascending: false })
-      .limit(1)
-      .maybeSingle();
-    const age = data ? Date.now() - Date.parse(data.last_seen_at) : Infinity;
-    const metadata = (data?.metadata ?? {}) as Record<string, unknown>;
-    checks.worker = { ok: age < 90_000, detail: data?.last_seen_at ?? 'Nenhum heartbeat' };
+      .limit(50);
+    const nodes = (data ?? []).map((row) => ({
+      id: row.id,
+      last_seen_at: row.last_seen_at,
+      metadata: (row.metadata ?? {}) as Record<string, unknown>,
+    }));
+    workersCensus = censusWorkers(nodes);
+    const requireProduction = process.env.NODE_ENV === 'production';
+    checks.worker = {
+      ok: workerHealthOk(workersCensus, requireProduction),
+      detail: requireProduction
+        ? `production_live=${workersCensus.production.live} development_live=${workersCensus.development.live}`
+        : `live=${workersCensus.live_count}`,
+    };
+    const live = nodes.find((_, index) => workersCensus?.rows[index]?.live) ?? nodes[0];
+    const metadata = (live?.metadata ?? {}) as Record<string, unknown>;
     const openai = Boolean(metadata.openai);
     const gemini = Boolean(metadata.gemini);
     const geminiBlocked = Boolean(metadata.geminiBlocked);
@@ -96,17 +128,9 @@ export async function collectHealthChecks() {
             ? 'gemini'
             : 'unknown';
     const real = metadata.vision_real === true || provider === 'openai' || provider === 'gemini';
-    const geminiDetail = !gemini
-      ? 'Gemini: missing'
-      : geminiBlocked
-        ? 'Gemini: configured but blocked'
-        : provider === 'openai'
-          ? 'Gemini: configured but idle'
-          : 'Gemini: configured';
-    const openaiDetail = openai ? 'OpenAI: active' : 'OpenAI: missing';
     checks.vision = {
       ok: true,
-      detail: `${geminiDetail}; ${openaiDetail}; Vision: ${real ? 'REAL' : 'HEURISTIC'}`,
+      detail: `Vision: ${real ? 'REAL' : 'HEURISTIC'}; provider=${provider}${geminiBlocked ? '; gemini_blocked' : ''}`,
     };
     if (metadata.rawLifecycle === 'unconfigured') {
       checks.rawRetention = {
@@ -115,6 +139,16 @@ export async function collectHealthChecks() {
       };
     } else if (metadata.rawLifecycle === 'ok') {
       checks.rawRetention = { ok: true, detail: '7-day raw prefix lifecycle' };
+    }
+    const yolo =
+      metadata.yolo && typeof metadata.yolo === 'object'
+        ? (metadata.yolo as Record<string, unknown>)
+        : null;
+    if (yolo) {
+      checks.yolo = {
+        ok: yolo.ok === true,
+        detail: `device=${String(yolo.device ?? 'unknown')} loaded=${String(yolo.loaded)} reason=${String(yolo.reason ?? '')}`,
+      };
     }
   } catch (error) {
     checks.worker = { ok: false, detail: error instanceof Error ? error.message : 'Erro' };
@@ -136,12 +170,20 @@ export async function collectHealthChecks() {
       detail: error instanceof Error ? error.message : 'ffprobe ausente',
     };
   }
-  const ok = ['supabase', 'minio', 'redis', 'bullmq', 'worker', 'ffmpeg', 'ffprobe'].every(
-    (key) => checks[key]?.ok,
-  );
+  const ok = ['supabase', 'minio', 'redis', 'bullmq', 'worker'].every((key) => checks[key]?.ok);
   return {
     status: ok ? 'healthy' : 'degraded',
     configured: true,
+    live: true,
+    ready: true,
+    workers: workersCensus
+      ? {
+          live: workersCensus.live_count,
+          production: workersCensus.production,
+          development: workersCensus.development,
+          masked_by_dev: workersCensus.production_masked_by_dev,
+        }
+      : null,
     checks,
     config: getConfigItems().map(({ key, configured, required }) => ({
       key,

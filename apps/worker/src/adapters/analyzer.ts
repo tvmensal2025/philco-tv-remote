@@ -230,14 +230,17 @@ export async function analyzeMomentFrames(input: {
 }
 
 function buildFramePrompt(style: StyleName, cameras: number[], extra?: string) {
-  return `Você classifica frames JPEG de até 4 câmeras do mesmo instante em um restaurante brasileiro.
-Não monte a timeline. Não identifique clientes. Diga o que cada câmera serve: C1 serviço/master, C2 cozinha/ofício, C3 prato/comida, C4 sala/ambiente.
-Comida não deve ganhar o ranking só por ser comida. Sala e serviço importam.
+  return `Você classifica frames JPEG de até 4 câmeras. Elas podem NÃO ser o mesmo lugar nem a mesma ação.
+Não monte a timeline. Não identifique clientes. Não invente culinária, cidade ou marca.
+Para cada câmera descreva o que realmente aparece: local, ação, comida, pessoas, iluminação, blur, watermark ou marca de terceiro (ex.: canal de TV, outro restaurante).
+Role da câmera (master/side/food/ambience) é só um rótulo técnico — ignore se a imagem não corresponder.
+Se as câmeras mostrarem cozinhas, pratos ou lugares diferentes, diga isso na reason. Não force coerência.
 Câmeras: ${cameras.map((position) => `C${position}`).join(', ')}.
 Estilo: ${style}.
 ${extra ? `Diretriz: ${extra}` : ''}
+camera_rankings MUST include exactly one object per listed camera. Each reason describes THAT camera only.
 Responda SOMENTE JSON:
-{"score":0-100,"reason":"texto","detailedScores":{"food":0-100,"action":0-100,"visual":0-100,"marketing":0-100,"ambience":0-100},"food_score":0-100,"action_score":0-100,"visual_score":0-100,"marketing_score":0-100,"ambience_score":0-100,"people_score":0-100,"story_score":0-100,"confidence":0-100,"description":"texto","privacy_risk":"baixo","recommended_use":"reel","camera_rankings":[{"cameraPosition":4,"score":80,"reason":"Sala com movimento."}],"best_frames":[{"cameraPosition":1,"offsetSeconds":8,"reason":"serviço"}],"scenes":[{"cameraPosition":1,"startOffsetSeconds":2,"durationSeconds":3,"reason":"classificação"}],"captionPt":"legenda","hashtags":["#restaurante"]}`;
+{"score":0-100,"reason":"texto","detailedScores":{"food":0-100,"action":0-100,"visual":0-100,"marketing":0-100,"ambience":0-100},"food_score":0-100,"action_score":0-100,"visual_score":0-100,"marketing_score":0-100,"ambience_score":0-100,"people_score":0-100,"story_score":0-100,"confidence":0-100,"description":"texto","privacy_risk":"baixo","recommended_use":"reel","camera_rankings":[{"cameraPosition":1,"score":88,"reason":"C1: descreva só esta câmera."},{"cameraPosition":2,"score":40,"reason":"C2: descreva só esta câmera."},{"cameraPosition":3,"score":55,"reason":"C3: descreva só esta câmera."},{"cameraPosition":4,"score":20,"reason":"C4: descreva só esta câmera."}],"best_frames":[{"cameraPosition":1,"offsetSeconds":8,"reason":"melhor frame visível"}],"scenes":[{"cameraPosition":1,"startOffsetSeconds":2,"durationSeconds":3,"reason":"classificação"}],"captionPt":"","hashtags":[]}`;
 }
 
 export async function analyzeHighlightClip(input: {
@@ -342,13 +345,13 @@ export function decisionFromVision(
 }
 
 function buildPrompt(style: StyleName, cameras: number[], extra?: string) {
-  return `Você analisa um clipe curto (até 12s) de câmera de restaurante brasileiro para um Reel vertical 9:16.
-Não identifique clientes. Foque em comida, preparo, serviço e atmosfera.
-Câmeras disponíveis neste instante: ${cameras.map((position) => `C${position}`).join(', ') || 'C1'}.
-Estilo de edição: ${style} (dynamic=cortes 1.2-2.5s, natural=2.5-4s, cinematic=4-8s).
-${extra ? `Diretriz do restaurante: ${extra}` : ''}
-Responda SOMENTE JSON com:
-{"score":0-100,"reason":"texto curto","detailedScores":{"food":0-100,"action":0-100,"visual":0-100,"marketing":0-100,"ambience":0-100},"scenes":[{"cameraPosition":1,"startOffsetSeconds":0,"durationSeconds":2.5,"reason":"por que este corte"}],"captionPt":"legenda Instagram em português","hashtags":["#food"]}`;
+  return `Você analisa um clipe curto de câmera de restaurante para um Reel 9:16.
+As câmeras podem não ser o mesmo lugar. Não invente culinária, cidade ou marca. Não identifique clientes.
+Se houver watermark ou outro estabelecimento, diga isso.
+Estilo: ${style}. Câmeras: ${cameras.map((position) => `C${position}`).join(', ') || 'C1'}.
+${extra ? `Diretriz: ${extra}` : ''}
+Responda SOMENTE JSON:
+{"score":0-100,"reason":"texto curto","detailedScores":{"food":0-100,"action":0-100,"visual":0-100,"marketing":0-100,"ambience":0-100},"scenes":[{"cameraPosition":1,"startOffsetSeconds":0,"durationSeconds":2.5,"reason":"por que este corte"}],"captionPt":"","hashtags":[]}`;
 }
 
 function stripJsonFence(text: string) {

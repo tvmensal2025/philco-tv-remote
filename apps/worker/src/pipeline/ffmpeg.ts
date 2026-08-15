@@ -1,10 +1,12 @@
+import { cropNeedsPadBlur } from '@reelops/shared';
 import { spawn } from 'node:child_process';
 import { mkdir, readdir } from 'node:fs/promises';
 import path from 'node:path';
 import { config } from '../config.js';
+import { ffmpegSlot } from '../engine/provider-slots.js';
 import { log } from '../services.js';
 import type { ReelPlan } from '../engine/planner.js';
-import { mixVoiceoverGraph } from './audio.js';
+import { deliveryAudioEncodeArgs, deliveryAudioFilter, mixVoiceoverGraph } from './audio.js';
 import { ffmpegSubtitlesFilter } from './captions.js';
 import {
   parseLoudness,
@@ -16,6 +18,8 @@ import {
 import {
   ffmpegSourceCrop,
   joinOverlayFilter,
+  logoOverlayFilter,
+  endCardPlateFilter,
   masterFinish,
   takeFilter,
   takeFilterStatic,
@@ -32,6 +36,11 @@ import {
 export type { RenderProfile, RenderResult, RenderWarning } from './render-profile.js';
 export { isFfmpegMemoryError, renderProfileOrder } from './render-profile.js';
 
+export type VerticalBrandPass = {
+  logoPath?: string | null;
+  endCard?: boolean;
+};
+
 function ffmpegGlobals() {
   const threads = config.FFMPEG_THREADS;
   if (threads <= 0) return [] as string[];
@@ -45,6 +54,11 @@ function resolveMediaBinary(binary: string) {
 }
 
 export async function run(binary: string, args: string[], timeoutMs = 15 * 60 * 1000) {
+  if (binary === 'ffmpeg') return ffmpegSlot.run(() => runUncapped(binary, args, timeoutMs));
+  return runUncapped(binary, args, timeoutMs);
+}
+
+async function runUncapped(binary: string, args: string[], timeoutMs: number) {
   const resolved = resolveMediaBinary(binary);
   const finalArgs = binary === 'ffmpeg' ? [...ffmpegGlobals(), ...args] : args;
   return new Promise<string>((resolve, reject) => {
@@ -74,6 +88,12 @@ export async function run(binary: string, args: string[], timeoutMs = 15 * 60 * 
 }
 
 export async function runAllowFail(binary: string, args: string[], timeoutMs = 2 * 60 * 1000) {
+  if (binary === 'ffmpeg')
+    return ffmpegSlot.run(() => runAllowFailUncapped(binary, args, timeoutMs));
+  return runAllowFailUncapped(binary, args, timeoutMs);
+}
+
+async function runAllowFailUncapped(binary: string, args: string[], timeoutMs: number) {
   const resolved = resolveMediaBinary(binary);
   const finalArgs = binary === 'ffmpeg' ? [...ffmpegGlobals(), ...args] : args;
   return new Promise<string>((resolve, reject) => {
@@ -136,6 +156,33 @@ export async function probeDuration(input: string) {
   const duration = Number(output.trim().split(/\s+/)[0]);
   if (!Number.isFinite(duration)) throw new Error('INVALID_OUTPUT_DURATION');
   return duration;
+}
+
+export async function extractJpegFrameAt(input: string, atSeconds: number, output: string) {
+  await mkdir(path.dirname(output), { recursive: true });
+  const source = input.replaceAll('\\', '/');
+  const dest = output.replaceAll('\\', '/');
+  await run(
+    'ffmpeg',
+    [
+      '-hide_banner',
+      '-loglevel',
+      'error',
+      '-y',
+      ...(source.endsWith('.txt') ? ['-f', 'concat', '-safe', '0'] : []),
+      '-ss',
+      String(Math.max(0, atSeconds)),
+      '-i',
+      source,
+      '-frames:v',
+      '1',
+      '-q:v',
+      '4',
+      dest,
+    ],
+    30_000,
+  );
+  return output;
 }
 
 export async function extractJpegFrames(
@@ -274,6 +321,7 @@ export async function renderVertical(
   output: string,
   captionsPath?: string | null,
   voicePath?: string | null,
+  brand?: VerticalBrandPass,
 ): Promise<RenderResult> {
   if (!plan.scenes.length) throw new Error('NO_SCENES_IN_PLAN');
   const start = config.RENDER_PROFILE;
@@ -282,7 +330,7 @@ export async function renderVertical(
   let memoryPressure = false;
   for (const profile of order) {
     try {
-      await renderFinished(plan, output, captionsPath, profile, voicePath);
+      await renderFinished(plan, output, captionsPath, profile, voicePath, brand);
       const fell = profile !== start;
       const used = profile === 'safe' && fell ? 'safe_fallback' : profile;
       const warning: RenderWarning | undefined = !fell
@@ -297,6 +345,8 @@ export async function renderVertical(
           render_warning: warning ?? null,
           scenes: plan.scenes.length,
           ffmpegThreads: config.FFMPEG_THREADS,
+          brand_logo: Boolean(brand?.logoPath),
+          brand_end_card: Boolean(brand?.endCard),
         },
         'render finished',
       );
@@ -324,6 +374,7 @@ async function renderFinished(
   captionsPath: string | null | undefined,
   profile: RenderProfile,
   voicePath?: string | null,
+  brand?: VerticalBrandPass,
 ) {
   const args: string[] = ['-hide_banner', '-loglevel', 'error', '-y'];
   plan.scenes.forEach((scene) => {
@@ -331,11 +382,15 @@ async function renderFinished(
     args.push(...(source.endsWith('.txt') ? ['-f', 'concat', '-safe', '0'] : []), '-i', source);
   });
   if (voicePath) args.push('-i', voicePath.replaceAll('\\', '/'));
+  const logoPath = brand?.logoPath ? brand.logoPath.replaceAll('\\', '/') : null;
+  if (logoPath) args.push('-i', logoPath);
+  const logoInputIndex = logoPath ? plan.scenes.length + (voicePath ? 1 : 0) : undefined;
 
   if (profile === 'safe') {
-    const videoFilters = plan.scenes.map(
-      (scene, index) =>
-        `[${index}:v]trim=start=${scene.source_start_offset}:duration=${scene.duration},setpts=PTS-STARTPTS,${ffmpegSourceCrop(scene.crop)}scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,fps=30,setsar=1[v${index}]`,
+    const videoFilters = plan.scenes.map((scene, index) =>
+      scene.cropMode === 'pad_blur' || cropNeedsPadBlur(scene)
+        ? takeFilterStatic({ ...scene, cropTight: true, punchIn: false }, index)
+        : `[${index}:v]trim=start=${scene.source_start_offset}:duration=${scene.duration},setpts=PTS-STARTPTS,${ffmpegSourceCrop(scene.crop, scene.cropFilter)}scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,fps=30,setsar=1[v${index}]`,
     );
     const concat = `${plan.scenes.map((_, index) => `[v${index}]`).join('')}concat=n=${plan.scenes.length}:v=1:a=0[basev]`;
     await mapAndEncode(
@@ -347,6 +402,7 @@ async function renderFinished(
       captionsPath,
       undefined,
       voicePath,
+      { logoInputIndex, endCard: Boolean(brand?.endCard) },
     );
     return;
   }
@@ -394,6 +450,7 @@ async function renderFinished(
     captionsPath,
     chain.duration,
     voicePath,
+    { logoInputIndex, endCard: Boolean(brand?.endCard) },
   );
 }
 
@@ -406,14 +463,23 @@ async function mapAndEncode(
   captionsPath?: string | null,
   audioDuration?: number,
   voicePath?: string | null,
+  brand?: { logoInputIndex?: number; endCard?: boolean },
 ) {
   const graph = [...filters];
   let map = videoMap;
-  if (captionsPath) {
-    graph.push(`${videoMap}${ffmpegSubtitlesFilter(captionsPath)}[capv]`);
-    map = '[capv]';
+  if (typeof brand?.logoInputIndex === 'number') {
+    graph.push(logoOverlayFilter(map, brand.logoInputIndex));
+    map = '[logov]';
   }
   const duration = audioDuration ?? plan.duration;
+  if (brand?.endCard) {
+    graph.push(endCardPlateFilter(map, duration));
+    map = '[endv]';
+  }
+  if (captionsPath) {
+    graph.push(`${map}${ffmpegSubtitlesFilter(captionsPath)}[capv]`);
+    map = '[capv]';
+  }
   if (voicePath) {
     const audioIndex = plan.audio
       ? plan.scenes.findIndex(
@@ -435,11 +501,11 @@ async function mapAndEncode(
     const inputIndex = audioIndex >= 0 ? audioIndex : 0;
     const fadeOutStart = Math.max(0, duration - 0.8);
     graph.push(
-      `[${inputIndex}:a]atrim=start=${plan.audio.source_start_offset}:duration=${duration},asetpts=PTS-STARTPTS,afade=t=in:st=0:d=0.55,afade=t=out:st=${fadeOutStart}:d=0.8,aresample=async=1,loudnorm=I=-16:TP=-1.5:LRA=11[outa]`,
+      `[${inputIndex}:a]atrim=start=${plan.audio.source_start_offset}:duration=${duration},asetpts=PTS-STARTPTS,afade=t=in:st=0:d=0.55,afade=t=out:st=${fadeOutStart}:d=0.8,${deliveryAudioFilter()},loudnorm=I=-16:TP=-1.5:LRA=11[outa]`,
     );
   }
   args.push('-filter_complex', graph.join(';'), '-map', map);
-  if (voicePath || plan.audio) args.push('-map', '[outa]', '-c:a', 'aac', '-b:a', '192k');
+  if (voicePath || plan.audio) args.push('-map', '[outa]', ...deliveryAudioEncodeArgs());
   else args.push('-an');
   args.push(
     '-c:v',

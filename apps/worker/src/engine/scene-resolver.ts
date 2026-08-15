@@ -26,7 +26,7 @@ export type ResolvedTimeline = {
   duration: number;
 };
 
-const LABEL = /^c(?:amera)?[\s_-]?(\d{1,2})$/i;
+const LABEL = /^(?:c(?:amera)?[\s._-]?)(\d{1,2})$/i;
 
 export function directorCandidatesFromClips(clips: ClipCandidate[]): DirectorCandidate[] {
   return clips.map((clip) => ({
@@ -42,29 +42,48 @@ export function directorCandidatesFromClips(clips: ClipCandidate[]): DirectorCan
   }));
 }
 
+function candidateByLabel(
+  value: unknown,
+  byLabel: Map<string, DirectorCandidate>,
+  byPosition: Map<number, DirectorCandidate>,
+) {
+  const match = String(value ?? '')
+    .trim()
+    .match(LABEL);
+  if (!match) return undefined;
+  return byLabel.get(`c${match[1]}`) ?? byPosition.get(Number(match[1]));
+}
+
+function resolveCandidate(
+  scene: { cameraId: string; recordingId: string; cameraPosition?: number },
+  candidates: DirectorCandidate[],
+): DirectorCandidate {
+  if (!candidates.length) throw new Error('DIRECTOR_INVALID_REFERENCE');
+  const byCamera = new Map(candidates.map((item) => [item.cameraId, item]));
+  const byRecording = new Map(candidates.map((item) => [item.recordingId, item]));
+  const byPosition = new Map(candidates.map((item) => [item.cameraPosition, item]));
+  const byLabel = new Map(candidates.map((item) => [item.cameraLabel.toLowerCase(), item]));
+  return (
+    byCamera.get(scene.cameraId) ??
+    byRecording.get(scene.cameraId) ??
+    byCamera.get(scene.recordingId) ??
+    byRecording.get(scene.recordingId) ??
+    candidateByLabel(scene.cameraId, byLabel, byPosition) ??
+    (scene.cameraPosition ? byPosition.get(scene.cameraPosition) : undefined) ??
+    candidates[0]!
+  );
+}
+
 export function repairDirectorReferences(
   decision: VideoEditDecisionV2,
   candidates: DirectorCandidate[],
 ): VideoEditDecisionV2 {
-  const byCamera = new Map(candidates.map((item) => [item.cameraId, item]));
-  const byRecording = new Set(candidates.map((item) => item.recordingId));
-  const byPosition = new Map(candidates.map((item) => [item.cameraPosition, item]));
-  const byLabel = new Map(candidates.map((item) => [item.cameraLabel.toLowerCase(), item]));
-
   const scenes = decision.scenes.map((scene) => {
-    let camera = byCamera.get(scene.cameraId);
-    if (!camera) {
-      const labelMatch = String(scene.cameraId).match(LABEL);
-      if (!labelMatch) throw new Error('DIRECTOR_INVALID_REFERENCE');
-      camera = byLabel.get(`c${labelMatch[1]}`) ?? byPosition.get(Number(labelMatch[1]));
-    }
-    if (!camera) throw new Error('DIRECTOR_INVALID_REFERENCE');
-    const recordingId = byRecording.has(scene.recordingId) ? scene.recordingId : camera.recordingId;
-    if (!byRecording.has(recordingId)) throw new Error('DIRECTOR_INVALID_REFERENCE');
+    const camera = resolveCandidate(scene, candidates);
     return {
       ...scene,
       cameraId: camera.cameraId,
-      recordingId,
+      recordingId: camera.recordingId,
       cameraPosition: camera.cameraPosition,
       cameraRole: camera.cameraRole,
     };
@@ -111,7 +130,9 @@ export function resolveTimeline(
   const byCamera = new Map(candidates.map((item) => [item.cameraId, item]));
   const intensity = resolveEditingIntensityProfile(decision.editingIntensity);
   const minMs = Math.round(intensity.targetShotDurationMs * 0.55);
-  const maxMs = Math.round(intensity.targetShotDurationMs * 1.65);
+  const maxMs = Math.round(
+    intensity.targetShotDurationMs * (decision.editMode === 'single_camera' ? 2.5 : 1.65),
+  );
 
   const scenes: ReelPlanScene[] = decision.scenes.flatMap((scene, index) => {
     const camera = byCamera.get(scene.cameraId);
@@ -145,6 +166,7 @@ export function resolveTimeline(
         fadeOut: last,
         punchIn: scene.shotStyle === 'punch_in',
         motion: motionFromScene(scene),
+        shotStyle: scene.shotStyle,
       },
     ];
   });
@@ -162,11 +184,68 @@ export function resolveTimeline(
   };
 }
 
+export function sourceSpanSeconds(
+  scenes: Array<{ source_start_offset: number; duration: number }>,
+) {
+  if (!scenes.length) return 0;
+  const start = Math.min(...scenes.map((scene) => scene.source_start_offset));
+  const end = Math.max(...scenes.map((scene) => scene.source_start_offset + scene.duration));
+  return end - start;
+}
+
+export function preferExploredSingleCameraTimeline(input: {
+  editMode?: string;
+  highQualitySource: boolean;
+  resolved: ResolvedTimeline;
+  playbook: ReelPlan;
+  windowDurationSeconds: number;
+}): { timeline: ResolvedTimeline; usedPlaybookExploration: boolean } {
+  if (input.editMode !== 'single_camera' || !input.highQualitySource) {
+    return { timeline: input.resolved, usedPlaybookExploration: false };
+  }
+  if (input.playbook.scenes.length < 4) {
+    return { timeline: input.resolved, usedPlaybookExploration: false };
+  }
+  const window = Math.max(1, input.windowDurationSeconds);
+  const resolvedSpan = sourceSpanSeconds(input.resolved.scenes);
+  const directorScenes = input.resolved.scenes.length;
+  const overlong =
+    input.playbook.duration > 0 && input.resolved.duration > input.playbook.duration * 1.3;
+  if (directorScenes >= 4 && resolvedSpan >= window * 0.45 && !overlong) {
+    return { timeline: input.resolved, usedPlaybookExploration: false };
+  }
+  if (directorScenes < 4 || resolvedSpan < window * 0.45 || overlong) {
+    return {
+      timeline: {
+        source: 'decision_v2',
+        scenes: input.playbook.scenes,
+        duration: input.playbook.duration,
+      },
+      usedPlaybookExploration: true,
+    };
+  }
+  return { timeline: input.resolved, usedPlaybookExploration: false };
+}
+
 export function applyResolvedTimeline(plan: ReelPlan, resolved: ResolvedTimeline): ReelPlan {
+  const cropByCamera = new Map<string, Pick<ReelPlanScene, 'crop' | 'cropMode' | 'cropTight'>>();
+  for (const scene of plan.scenes) {
+    if (!scene.crop) continue;
+    cropByCamera.set(scene.camera_id, {
+      crop: scene.crop,
+      cropMode: scene.cropMode,
+      cropTight: scene.cropTight,
+    });
+  }
+  const scenes = resolved.scenes.map((scene) => {
+    const crop = cropByCamera.get(scene.camera_id);
+    if (!crop || scene.crop) return scene;
+    return { ...scene, ...crop };
+  });
   const audio = plan.audio ? { ...plan.audio, duration: resolved.duration } : undefined;
   return {
     ...plan,
-    scenes: resolved.scenes,
+    scenes,
     duration: resolved.duration,
     audio,
   };

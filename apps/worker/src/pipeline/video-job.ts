@@ -4,20 +4,32 @@ import {
   calendarDay,
   classifyJobFailure,
   createRenderManifest,
+  defaultBrandingFor,
   DIRECTOR_SCHEMA_VERSION_V2,
   evaluateCompositionQuality,
   evaluateTechnicalQuality,
+  groundedCaption,
+  programBrandCopy,
   reelRenderPrefix,
   shouldRetryJob,
   videoEditDecisionV2ToV1,
   videoJobSchema,
+  canPromoteFinalOutput,
+  executionObjectKeys,
   type VideoJob,
 } from '@reelops/shared';
 import type { Job } from 'bullmq';
 import { UnrecoverableError } from 'bullmq';
+import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { copyFile, mkdir, mkdtemp, rm } from 'node:fs/promises';
-import { collectCameraClips, uploadOutput, uploadThumbnail } from './media.js';
+import {
+  collectCameraClips,
+  copyObject,
+  downloadObject,
+  uploadOutput,
+  uploadThumbnail,
+} from './media.js';
 import {
   configuredVisionKind,
   createAnalyzer,
@@ -25,7 +37,24 @@ import {
   type PlannedScene,
   type VisionFrame,
 } from '../adapters/analyzer.js';
-import { applyYoloCrops, isYoloConfigured } from '../adapters/yolo.js';
+import {
+  applyYoloCrops,
+  inspectCameras,
+  isYoloConfigured,
+  trackClipFile,
+} from '../adapters/yolo.js';
+import { visionCircuit, visionSlot } from '../engine/provider-slots.js';
+import {
+  applyCutSafety,
+  applySmartReframe,
+  mapDetectionsToSource,
+  scoresFromRanker,
+} from '../engine/quality-pass.js';
+import {
+  buildCameraSignals,
+  filterClipsForEdit,
+  selectEditorialCameras,
+} from '../engine/editorial-select.js';
 import {
   createVoiceProvider,
   isVoiceConfigured,
@@ -33,7 +62,13 @@ import {
   type AudioAsset,
 } from '../adapters/voice.js';
 import { isRealVisionProvider } from '../adapters/vision-provider.js';
-import { extractClip, extractJpegFrames, makeThumbnail, scanSegment } from './ffmpeg.js';
+import {
+  extractClip,
+  extractJpegFrameAt,
+  extractJpegFrames,
+  makeThumbnail,
+  scanSegment,
+} from './ffmpeg.js';
 import { probeMedia } from './probe-media.js';
 import { renderComposition } from './composition.js';
 import { decisionFromReelPlan } from '../engine/director.js';
@@ -41,14 +76,23 @@ import { decideWithAiDirector } from '../engine/ai-director.js';
 import {
   applyResolvedTimeline,
   directorCandidatesFromClips,
+  preferExploredSingleCameraTimeline,
   resolveTimeline,
 } from '../engine/scene-resolver.js';
+import { HIGH_QUALITY_CAMERA_SCORE } from '../engine/peak-snap.js';
 import { casaCompositionLayout } from '../composition/design-system.js';
-import { writeCaptionAss } from './captions.js';
+import { writeProgramAss } from './captions.js';
 import { runVisualQc } from './visual-qc.js';
-import { setStatus } from './status.js';
+import {
+  beginReelExecution,
+  currentReelClaim,
+  setStatus,
+  StaleExecutionError,
+  withReelClaim,
+} from './status.js';
 import { config } from '../config.js';
 import { db, log } from '../services.js';
+import { workerId } from '../worker-id.js';
 import { ReelPlanner } from '../engine/planner.js';
 import { loadPublishedPlaybook } from '../engine/program-presets.js';
 import type { PeakHit } from '../engine/peak-snap.js';
@@ -65,6 +109,31 @@ export async function processVideo(job: Job<VideoJob>) {
     program: payload.program,
   };
   const authoritative = await verifyAuthoritativeData(payload);
+  let claim;
+  try {
+    claim = await beginReelExecution({
+      tenantId: payload.tenantId,
+      reelId: payload.reelId,
+      executionId: randomUUID(),
+      workerId,
+    });
+  } catch (error) {
+    if (error instanceof StaleExecutionError) {
+      log.warn(jobLog, 'stale execution skipped before start');
+      throw new UnrecoverableError('STALE_EXECUTION');
+    }
+    throw error;
+  }
+  Object.assign(jobLog, { worker_id: workerId, execution_id: claim.executionId });
+  return withReelClaim(claim, () => processClaimedVideo(job, payload, jobLog, authoritative));
+}
+
+async function processClaimedVideo(
+  job: Job<VideoJob>,
+  payload: VideoJob,
+  jobLog: Record<string, unknown>,
+  authoritative: Awaited<ReturnType<typeof verifyAuthoritativeData>>,
+) {
   await mkdir(config.WORK_DIR, { recursive: true });
   const dir = await mkdtemp(path.join(config.WORK_DIR, 'job-'));
   const timings: Record<string, number> = {};
@@ -200,11 +269,80 @@ export async function processVideo(job: Job<VideoJob>) {
         }
       }),
     );
-    const plan = await planner.plan(clips, stored, {
-      peaksByCamera,
-      program: payload.program,
-      playbook: await loadPublishedPlaybook(payload.program),
-    });
+    const playbook = await loadPublishedPlaybook(payload.program);
+    let cameraRank: Awaited<ReturnType<typeof inspectCameras>> = [];
+    if (config.ENABLE_MULTICAMERA_RANKER && (isYoloConfigured() || framePaths.length)) {
+      try {
+        cameraRank = await inspectCameras({
+          cameras: clips.map((clip) => ({ position: clip.position, role: clip.role })),
+          framePaths,
+        });
+        log.info(
+          {
+            ...jobLog,
+            rank: cameraRank.map((row) => `C${row.cameraPosition}:${row.score}`),
+          },
+          'multicamera ranker',
+        );
+      } catch (error) {
+        log.warn(
+          { ...jobLog, err: error instanceof Error ? error.message : error },
+          'multicamera ranker skipped',
+        );
+      }
+    }
+    if (!visionCircuit.allow()) throw new Error('VISION_CIRCUIT_OPEN');
+    let analysis = stored;
+    let plan;
+    let editorial: ReturnType<typeof selectEditorialCameras> | null = null;
+    let workingClips = clips;
+    try {
+      const vision = await visionSlot.run(async () => {
+        const nextAnalysis = analysis ?? (await analyzer.analyze(clips));
+        const signals = buildCameraSignals({ clips, analysis: nextAnalysis, yolo: cameraRank });
+        const nextEditorial = selectEditorialCameras(signals);
+        const nextWorking = filterClipsForEdit(clips, nextEditorial);
+        log.info(
+          {
+            ...jobLog,
+            mode: nextEditorial.recommendedMode,
+            primary: `C${nextEditorial.primaryCameraPosition}`,
+            compatible: nextEditorial.compatibleCameraIds,
+            rejected: nextEditorial.rejected.map((row) => `C${row.cameraPosition}:${row.reason}`),
+            scores: nextEditorial.scores.map((row) => `C${row.cameraPosition}:${row.score}`),
+          },
+          'scene coherence gate',
+        );
+        return {
+          analysis: nextAnalysis,
+          editorial: nextEditorial,
+          workingClips: nextWorking,
+          plan: await planner.plan(nextWorking, nextAnalysis, {
+            peaksByCamera,
+            program: payload.program,
+            playbook,
+            cameraScores: nextEditorial.scores.length
+              ? new Map(nextEditorial.scores.map((row) => [row.cameraPosition, row.score]))
+              : cameraRank.length
+                ? scoresFromRanker(cameraRank)
+                : undefined,
+            editMode: nextEditorial.recommendedMode,
+            compatiblePositions: new Set(nextWorking.map((clip) => clip.position)),
+          }),
+        };
+      });
+      analysis = vision.analysis;
+      editorial = vision.editorial;
+      workingClips = vision.workingClips;
+      plan = vision.plan;
+      visionCircuit.success();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '';
+      if (/429|RATE_LIMIT|TIMEOUT|ECONNREFUSED|5\d\d|VISION_CIRCUIT/i.test(message)) {
+        visionCircuit.failure();
+      }
+      throw error;
+    }
     timings.geminiMs = Date.now() - visionStarted;
     timings.reelPlanningMs = timings.geminiMs;
     if (config.REQUIRE_REAL_VISION && !isRealVisionProvider(plan.provider))
@@ -226,6 +364,22 @@ export async function processVideo(job: Job<VideoJob>) {
       `vision`,
     );
 
+    const sourceByCamera = new Map<number, { width: number; height: number }>();
+    for (const clip of clips) {
+      if (sourceByCamera.has(clip.position)) continue;
+      try {
+        const sourceProbe = await probeMedia(clip.localPath);
+        const width = sourceProbe.video?.width;
+        const height = sourceProbe.video?.height;
+        if (width && height) sourceByCamera.set(clip.position, { width, height });
+      } catch (error) {
+        log.warn(
+          { camera: clip.position, err: error instanceof Error ? error.message : String(error) },
+          'source probe skipped',
+        );
+      }
+    }
+
     if (isYoloConfigured() && framePaths.length) {
       await setStatus(
         payload.tenantId,
@@ -235,7 +389,7 @@ export async function processVideo(job: Job<VideoJob>) {
         'Enquadrando sujeito 9:16',
       );
       const yoloStarted = Date.now();
-      const yolo = await applyYoloCrops({ scenes: plan.scenes, framePaths });
+      const yolo = await applyYoloCrops({ scenes: plan.scenes, framePaths, sourceByCamera });
       timings.yoloMs = Date.now() - yoloStarted;
       log.info({ ...jobLog, ...yolo, ms: timings.yoloMs }, 'yolo crop');
     }
@@ -262,14 +416,50 @@ export async function processVideo(job: Job<VideoJob>) {
       try {
         const ai = await decideWithAiDirector({
           plan,
-          clips,
+          clips: workingClips,
           ids,
           brand: authoritative.brand,
+          cameraRank: (editorial?.scores ?? cameraRank).map((row) => ({
+            cameraPosition: row.cameraPosition,
+            cameraRole: row.cameraRole,
+            score: row.score,
+          })),
+          coherence: editorial
+            ? {
+                recommendedMode: editorial.recommendedMode,
+                primaryCameraId: editorial.primaryCameraId,
+                compatibleCameraIds: editorial.compatibleCameraIds,
+                rejected: editorial.rejected,
+                multicameraConfidence: editorial.multicameraConfidence,
+              }
+            : undefined,
         });
-        decisionV2 = ai.decision;
-        decision = videoEditDecisionV2ToV1(ai.decision);
-        const resolved = resolveTimeline(decisionV2, directorCandidatesFromClips(clips), plan);
-        renderPlan = applyResolvedTimeline(plan, resolved);
+        decisionV2 = {
+          ...ai.decision,
+          editMode: editorial?.recommendedMode ?? ai.decision.editMode,
+        };
+        decision = videoEditDecisionV2ToV1(decisionV2);
+        const resolved = resolveTimeline(
+          decisionV2,
+          directorCandidatesFromClips(workingClips),
+          plan,
+        );
+        const explored = preferExploredSingleCameraTimeline({
+          editMode: decisionV2.editMode,
+          highQualitySource:
+            Math.max(
+              0,
+              ...(editorial?.scores.map((row) => row.score) ?? []),
+              ...(plan.cameraRankings?.map((row) => row.score) ?? []),
+            ) >= HIGH_QUALITY_CAMERA_SCORE,
+          resolved,
+          playbook: plan,
+          windowDurationSeconds: Math.max(
+            0,
+            ...workingClips.map((clip) => clip.windowDurationSeconds ?? 0),
+          ),
+        });
+        renderPlan = applyResolvedTimeline(plan, explored.timeline);
         timelineSource = 'decision_v2';
         directorUsed = 'ai_v2';
         directorUsage = ai.usage;
@@ -294,10 +484,180 @@ export async function processVideo(job: Job<VideoJob>) {
     } else {
       timings.directorMs = Date.now() - directorStarted;
     }
-    const captions =
-      renderPlan.caption && renderPlan.captionStrategy !== 'none'
-        ? await writeCaptionAss(dir, renderPlan.caption, renderPlan.duration)
-        : null;
+    const windowByCamera = new Map(
+      clips.map((clip) => [
+        clip.cameraId,
+        {
+          start: clip.startOffsetSeconds,
+          duration: clip.windowDurationSeconds ?? requestedDuration,
+        },
+      ]),
+    );
+    renderPlan = {
+      ...renderPlan,
+      scenes: applyCutSafety(renderPlan.scenes, peaksByCamera, windowByCamera),
+    };
+    if (isYoloConfigured()) {
+      const yoloStarted = Date.now();
+      const takeFrames: Array<{ cameraPosition: number; path: string; sceneIndex: number }> = [];
+      for (let index = 0; index < renderPlan.scenes.length; index += 1) {
+        const scene = renderPlan.scenes[index]!;
+        const framePath = path.join(dir, `crop-take-${index}.jpg`);
+        try {
+          await extractJpegFrameAt(
+            scene.source_recording_path,
+            scene.source_start_offset + Math.max(0.2, scene.duration * 0.4),
+            framePath,
+          );
+          takeFrames.push({ cameraPosition: scene.position, path: framePath, sceneIndex: index });
+        } catch (error) {
+          log.warn(
+            { ...jobLog, take: index, err: error instanceof Error ? error.message : String(error) },
+            'take crop frame skipped',
+          );
+        }
+      }
+      if (takeFrames.length) {
+        const yolo = await applyYoloCrops({
+          scenes: renderPlan.scenes,
+          framePaths: takeFrames,
+          sourceByCamera,
+        });
+        timings.yoloMs = (timings.yoloMs ?? 0) + (Date.now() - yoloStarted);
+        log.info({ ...jobLog, ...yolo, ms: timings.yoloMs }, 'yolo crop per take');
+      }
+    }
+    if (config.ENABLE_SMART_REFRAME) {
+      const trackIndexes = new Set<number>();
+      renderPlan.scenes.forEach((scene, index) => {
+        if (trackIndexes.size >= 2) return;
+        if (scene.shotStyle === 'tracked_subject') trackIndexes.add(index);
+      });
+      const nextScenes = [];
+      for (let index = 0; index < renderPlan.scenes.length; index += 1) {
+        const scene = renderPlan.scenes[index]!;
+        let people: Array<{
+          detectorClass: string;
+          confidence: number;
+          bbox: [number, number, number, number];
+        }> = [];
+        let food: typeof people = [];
+        let tracks: Array<{
+          timeMs: number;
+          trackId: number;
+          bbox: [number, number, number, number];
+          confidence: number;
+          className: string;
+        }> = [];
+        const source = sourceByCamera.get(scene.position);
+        const frameWidth = source?.width ?? 1280;
+        const frameHeight = source?.height ?? 720;
+        if (config.ENABLE_TRACKING && isYoloConfigured() && trackIndexes.has(index) && source) {
+          const clipPath = path.join(dir, `track-${index}.mp4`);
+          try {
+            await extractClip(
+              scene.source_recording_path,
+              scene.source_start_offset,
+              Math.min(8, scene.duration),
+              clipPath,
+            );
+            const tracked = await trackClipFile(clipPath);
+            const analysis =
+              tracked?.frame?.width && tracked.frame.height
+                ? { width: tracked.frame.width, height: tracked.frame.height }
+                : undefined;
+            if (!analysis) throw new Error('TRACK_FRAME_SIZE_MISSING');
+            const rawPeople: typeof people = [];
+            const rawFood: typeof food = [];
+            const rawTracks: typeof tracks = [];
+            for (const row of tracked?.people ?? []) {
+              if (row.track_id == null) continue;
+              rawTracks.push({
+                timeMs: row.time_ms,
+                trackId: row.track_id,
+                bbox: row.bbox,
+                confidence: row.confidence,
+                className: row.class_name,
+              });
+              rawPeople.push({
+                detectorClass: 'person',
+                confidence: row.confidence,
+                bbox: row.bbox,
+              });
+            }
+            for (const row of tracked?.food ?? []) {
+              rawFood.push({
+                detectorClass: row.class_name,
+                confidence: row.confidence,
+                bbox: row.bbox,
+              });
+            }
+            people = mapDetectionsToSource(rawPeople, analysis, source);
+            food = mapDetectionsToSource(rawFood, analysis, source);
+            tracks = mapDetectionsToSource(rawTracks, analysis, source);
+          } catch (error) {
+            people = [];
+            food = [];
+            tracks = [];
+            log.warn(
+              { ...jobLog, err: error instanceof Error ? error.message : error },
+              'scene tracking skipped',
+            );
+          }
+        }
+        nextScenes.push(
+          applySmartReframe(scene, {
+            people,
+            food,
+            tracks,
+            frameWidth,
+            frameHeight,
+            enableTracking: Boolean(tracks.length),
+          }),
+        );
+      }
+      renderPlan = { ...renderPlan, scenes: nextScenes };
+    }
+    const branding = playbook.branding ?? defaultBrandingFor(payload.program);
+    const safeCaption = groundedCaption({
+      caption: renderPlan.caption,
+      visionReason: [plan.reason, ...(plan.cameraRankings ?? []).map((row) => row.reason)].join(
+        ' ',
+      ),
+      restaurantName: authoritative.restaurantName,
+    });
+    const copy = programBrandCopy({
+      restaurantName: authoritative.restaurantName,
+      program: payload.program,
+      cta: authoritative.brand.cta ?? decision.text.cta,
+    });
+    let logoPath: string | null = null;
+    if (branding.logo && authoritative.brand.logoObjectKey) {
+      const key = authoritative.brand.logoObjectKey;
+      const ext = path.extname(key) || '.png';
+      const dest = path.join(dir, `logo-partner${ext}`);
+      try {
+        await downloadObject(key, dest);
+        logoPath = dest;
+      } catch (error) {
+        log.warn(
+          {
+            ...jobLog,
+            err: error instanceof Error ? error.message : String(error),
+            logo_key: key,
+          },
+          'partner logo missing; burning wordmark',
+        );
+      }
+    }
+    const captions = await writeProgramAss(dir, renderPlan.duration, {
+      caption: safeCaption,
+      title: branding.title ? copy.title : null,
+      lowerThird: branding.lowerThird ? copy.lowerThird : null,
+      cta: branding.cta ? copy.cta : null,
+      endCard: branding.endCard ? copy.endCard : null,
+      wordmark: branding.logo && !logoPath ? copy.wordmark : null,
+    });
     let voiceAsset: AudioAsset | null = null;
     const script = voiceoverScript({
       title: decision.text.title,
@@ -356,6 +716,8 @@ export async function processVideo(job: Job<VideoJob>) {
         output,
         captionsPath: captions,
         voicePath: voiceAsset?.path,
+        logoPath,
+        endCard: branding.endCard,
         workDir: dir,
       },
       requestedRenderer,
@@ -396,22 +758,21 @@ export async function processVideo(job: Job<VideoJob>) {
     if (technical.status !== 'passed') {
       throw new Error(`TECHNICAL_QC:${technical.issues.map((issue) => issue.code).join(',')}`);
     }
-    const layout = render.renderer === 'revideo' ? casaCompositionLayout : null;
+    const layout = casaCompositionLayout;
     const compositionQc = evaluateCompositionQuality({
-      title: decision.text.enabled
-        ? decision.text.title
-        : layout
-          ? (decision.text.title ?? 'Casa')
-          : null,
-      titleBox: layout?.titleBox,
-      logoBox: layout?.logoBox,
-      ctaBox: decision.text.cta ? layout?.ctaBox : null,
-      showLogo: Boolean(layout),
-      logoPresent: Boolean(layout),
-      assetsLoaded: layout ? ['logo-fixture.png', 'revideo-branding'] : [],
-      fontsLoaded: layout?.fonts,
-      fixtureBranding: layout?.fixtureBranding,
-      safeArea: layout?.safeArea,
+      title: branding.title ? copy.title : null,
+      titleBox: branding.title ? layout.titleBox : null,
+      logoBox: branding.logo ? layout.logoBox : null,
+      ctaBox: branding.cta ? layout.ctaBox : null,
+      showLogo: branding.logo,
+      logoPresent: branding.logo,
+      assetsLoaded: [
+        ...(logoPath ? ['partner-logo'] : branding.logo ? ['wordmark'] : []),
+        render.renderer === 'revideo' ? 'revideo-branding' : 'ffmpeg-ass',
+      ],
+      fontsLoaded: render.renderer === 'revideo' ? layout.fonts : ['Arial'],
+      fixtureBranding: render.renderer === 'revideo' ? layout.fixtureBranding : false,
+      safeArea: layout.safeArea,
     });
     if (compositionQc.status !== 'passed') {
       throw new Error(
@@ -449,12 +810,27 @@ export async function processVideo(job: Job<VideoJob>) {
     const uploadStarted = Date.now();
     const day = calendarDay(payload.windowStart, authoritative.timezone);
     const base = reelRenderPrefix(payload.tenantId, payload.restaurantId, day, payload.reelId);
-    await uploadOutput(output, `${base}/reel.mp4`);
-    await uploadThumbnail(thumbnail, `${base}/thumbnail.jpg`);
+    const claim = currentReelClaim();
+    const keys = executionObjectKeys(base, claim?.executionId ?? 'orphan');
+    await uploadOutput(output, keys.stagingVideo);
+    await uploadThumbnail(thumbnail, keys.stagingThumb);
+    const { data: ownership } = await db
+      .from('reels')
+      .select('metadata')
+      .eq('id', payload.reelId)
+      .eq('tenant_id', payload.tenantId)
+      .single();
+    const currentExecutionId = (ownership?.metadata as { execution_id?: string } | null)
+      ?.execution_id;
+    if (!claim || !canPromoteFinalOutput(currentExecutionId, claim.executionId)) {
+      throw new StaleExecutionError();
+    }
+    await copyObject(keys.stagingVideo, keys.canonicalVideo);
+    await copyObject(keys.stagingThumb, keys.canonicalThumb);
     timings.finalUploadMs = Date.now() - uploadStarted;
     await setStatus(payload.tenantId, payload.reelId, 'ready', 100, 'Reel pronto para revisão', {
-      output_path: `${base}/reel.mp4`,
-      thumbnail_path: `${base}/thumbnail.jpg`,
+      output_path: keys.canonicalVideo,
+      thumbnail_path: keys.canonicalThumb,
       duration_seconds: actualDuration,
       score: plan.score,
       caption: [plan.caption, ...(plan.hashtags ?? [])].filter(Boolean).join(' ') || null,
@@ -500,7 +876,21 @@ export async function processVideo(job: Job<VideoJob>) {
         composition_strategy: render.strategy ?? null,
         voice_provider: voiceAsset?.provider ?? null,
         voice_duration_ms: voiceAsset?.durationMs ?? null,
-        pipeline_version: config.VIDEO_PIPELINE_VERSION,
+        scene_coherence: editorial
+          ? {
+              mode: editorial.recommendedMode,
+              confidence: editorial.multicameraConfidence,
+              primary: `C${editorial.primaryCameraPosition}`,
+              compatible: editorial.compatibleCameraIds,
+              rejected: editorial.rejected,
+              scores: editorial.scores.map((row) => ({
+                camera: `C${row.cameraPosition}`,
+                score: row.score,
+                reasons: row.reasons,
+              })),
+            }
+          : null,
+        edit_mode: editorial?.recommendedMode ?? null,
         scenes: renderPlan.scenes.map((scene) => ({
           cam: `C${scene.position}`,
           cameraId: scene.camera_id,
@@ -513,6 +903,11 @@ export async function processVideo(job: Job<VideoJob>) {
           punchIn: scene.punchIn,
           motion: scene.motion,
           crop: scene.crop ?? null,
+          cropMode: scene.cropMode ?? null,
+          cropTight: scene.cropTight ?? null,
+          cameraScore:
+            editorial?.scores.find((row) => row.cameraPosition === scene.position)?.score ?? null,
+          coherenceScore: editorial?.multicameraConfidence ?? null,
         })),
       },
     });
@@ -534,9 +929,16 @@ export async function processVideo(job: Job<VideoJob>) {
       },
     });
   } catch (error) {
+    if (error instanceof StaleExecutionError) {
+      log.warn(jobLog, 'stale execution aborted');
+      throw new UnrecoverableError('STALE_EXECUTION');
+    }
     const attempts = Number(job.opts.attempts ?? 1);
     const finalAttempt = job.attemptsMade + 1 >= attempts;
     const message = error instanceof Error ? error.message : 'Erro desconhecido';
+    if (message === 'JOB_NOT_PROCESSABLE' || message === 'STALE_EXECUTION') {
+      throw new UnrecoverableError(message);
+    }
     const fatal = [
       'GEMINI_API_BLOCKED',
       'OPENAI_API_BLOCKED',
@@ -624,7 +1026,7 @@ async function verifyAuthoritativeData(payload: VideoJob) {
   const { data: reel, error } = await db
     .from('reels')
     .select(
-      'id,tenant_id,restaurant_id,moment_id,status,moments(occurred_at,window_start,window_end),restaurants(settings,timezone)',
+      'id,tenant_id,restaurant_id,moment_id,status,moments(occurred_at,window_start,window_end),restaurants(name,settings,timezone)',
     )
     .eq('id', payload.reelId)
     .eq('tenant_id', payload.tenantId)
@@ -645,6 +1047,7 @@ async function verifyAuthoritativeData(payload: VideoJob) {
   )
     throw new Error('STALE_JOB_PAYLOAD');
   const restaurant = reel.restaurants as unknown as {
+    name?: string;
     settings: Record<string, unknown>;
     timezone?: string;
   };
@@ -662,6 +1065,7 @@ async function verifyAuthoritativeData(payload: VideoJob) {
         : undefined,
     timezone: restaurant.timezone || 'America/Sao_Paulo',
     brand,
+    restaurantName: typeof restaurant.name === 'string' ? restaurant.name : 'Casa',
     enableRevideo,
   };
 }
