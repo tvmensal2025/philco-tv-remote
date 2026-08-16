@@ -52,7 +52,7 @@ export const brandingLayerLabels: Record<keyof ProgramBranding, string> = {
 
 export function defaultBrandingFor(program: EditProgram): ProgramBranding {
   return {
-    title: true,
+    title: program !== 'casa',
     logo: true,
     lowerThird: program === 'oficio',
     cta: program === 'pulso',
@@ -544,7 +544,7 @@ function spec(
     maxShare,
     minRoles,
     beats,
-    captions: { strategy: 'full' },
+    captions: { strategy: program === 'casa' ? 'none' : 'full' },
     branding: defaultBrandingFor(program),
   });
 }

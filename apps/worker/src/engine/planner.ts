@@ -3,6 +3,7 @@ import type { ClipCandidate, EditDecision, SceneAnalyzer } from '../adapters/ana
 import { coverageReport } from './coverage.js';
 import {
   HIGH_QUALITY_CAMERA_SCORE,
+  clusterPreferredStart,
   snapTake,
   spreadPreferredStart,
   type PeakHit,
@@ -82,7 +83,7 @@ export type HouseCutTake = {
   duration: number;
 };
 
-/** Casa never dips to black between takes. Punch-in on one camera eats the subject. */
+/** Casa never dips to black between takes. Punch-in and leak overlays eat the subject. */
 export function keepPictureJoins<T extends Pick<ReelPlan, 'program' | 'scenes' | 'join'>>(
   plan: T,
 ): T {
@@ -94,9 +95,25 @@ export function keepPictureJoins<T extends Pick<ReelPlan, 'program' | 'scenes' |
       ...scene,
       transition: index === 0 ? scene.transition : 'dissolve',
       joinDuration: index === 0 ? scene.joinDuration : undefined,
+      joinOverlay: undefined,
       punchIn: false,
       motion: scene.motion === 'punch' ? 'none' : scene.motion,
+      fxAssetId: undefined,
+      fxMode: 'none' as const,
     })),
+  };
+}
+
+export function recomputePlanDuration(plan: ReelPlan): ReelPlan {
+  return {
+    ...plan,
+    duration: joinedDuration(
+      plan.scenes.map((scene) => ({
+        duration: scene.duration,
+        transition: scene.transition,
+        joinDuration: scene.joinDuration,
+      })),
+    ),
   };
 }
 
@@ -195,15 +212,26 @@ export function compileProgram(input: {
       takeDuration: beat.durationSeconds,
       peaks: beat.preferPeak === false ? [] : (input.peaksByCamera.get(clip.cameraId) ?? []),
       usedOffsets: usedOffsets.get(clip.cameraId),
-      preferredStart: exploreSingleCamera
-        ? spreadPreferredStart({
-            windowStart: clip.startOffsetSeconds,
-            windowDuration,
-            takeDuration: beat.durationSeconds,
-            index: beatIndex,
-            count: book.beats.length,
-          })
-        : undefined,
+      preferredStart:
+        book.program === 'casa'
+          ? clusterPreferredStart({
+              windowStart: clip.startOffsetSeconds,
+              windowDuration,
+              takeDuration: beat.durationSeconds,
+              index: beatIndex,
+              count: book.beats.length,
+              peaks:
+                beat.preferPeak === false ? [] : (input.peaksByCamera.get(clip.cameraId) ?? []),
+            })
+          : exploreSingleCamera
+            ? spreadPreferredStart({
+                windowStart: clip.startOffsetSeconds,
+                windowDuration,
+                takeDuration: beat.durationSeconds,
+                index: beatIndex,
+                count: book.beats.length,
+              })
+            : undefined,
     });
     usedOffsets.set(clip.cameraId, [...(usedOffsets.get(clip.cameraId) ?? []), snapped.start]);
     lastCameraId = clip.cameraId;
@@ -225,6 +253,8 @@ export function compileProgram(input: {
       fadeOut: beat.fadeOut,
       punchIn: beat.punchIn,
       motion: beat.motion ?? (beat.punchIn ? 'punch' : clip.role === 'ambience' ? 'drift' : 'none'),
+      fxAssetId: beat.fxAssetId,
+      fxMode: beat.fxMode,
     });
   }
 
@@ -285,7 +315,7 @@ export function compileProgram(input: {
     cameraRankings: analysis?.cameraRankings,
     bestFrames: analysis?.bestFrames,
     framesAnalyzed: analysis?.framesAnalyzed,
-    captionStrategy: book.captions?.strategy,
+    captionStrategy: book.program === 'casa' ? 'none' : book.captions?.strategy,
   };
 }
 

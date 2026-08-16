@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { MusicAnalysis } from '@reelops/shared';
-import { assignStrategicFxAndSpeed } from './fx-pass.js';
+import { assignStrategicFxAndSpeed, shouldAssignStrategicFx } from './fx-pass.js';
 import type { ReelPlan } from './planner.js';
 
 function musicAtDrop(startSeconds: number): MusicAnalysis {
@@ -160,5 +160,11 @@ describe('fx pass', () => {
     });
     expect(next.scenes[1]?.fxAssetId).toBe('whoosh-01');
     expect(next.scenes[1]?.joinOverlay).toBeUndefined();
+  });
+
+  it('does not assign strategic FX on Casa even when a beat asked for auto', () => {
+    expect(shouldAssignStrategicFx('casa', [{ fxMode: 'auto' }])).toBe(false);
+    expect(shouldAssignStrategicFx('pulso', [{ fxMode: 'auto' }])).toBe(true);
+    expect(shouldAssignStrategicFx('oficio', [{ fxMode: 'none' }])).toBe(false);
   });
 });

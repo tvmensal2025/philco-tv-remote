@@ -77,6 +77,7 @@ import {
 import { probeMedia } from './probe-media.js';
 import { renderComposition } from './composition.js';
 import { pickMusicBed } from './music-bed.js';
+import { loadFxCatalogFromDisk } from './fx-assets.js';
 import { decisionFromReelPlan } from '../engine/director.js';
 import { decideWithAiDirector } from '../engine/ai-director.js';
 import {
@@ -101,6 +102,8 @@ import { config } from '../config.js';
 import { db, log } from '../services.js';
 import { workerId } from '../worker-id.js';
 import { houseCutFromPlan, keepPictureJoins, ReelPlanner } from '../engine/planner.js';
+import { assignStrategicFxAndSpeed, shouldAssignStrategicFx } from '../engine/fx-pass.js';
+import { judgeFinishedMp4, refinePlanTakes } from '../engine/take-judge.js';
 import { loadPublishedPlaybook } from '../engine/program-presets.js';
 import type { PeakHit } from '../engine/peak-snap.js';
 import type { StyleName } from '../engine/rhythm.js';
@@ -647,8 +650,45 @@ async function processClaimedVideo(
           { containAll: payload.program === 'casa' },
         ),
       });
+      await setStatus(payload.tenantId, payload.reelId, 'rendering', 58, 'Conferindo cada take');
+      const judgeStarted = Date.now();
+      renderPlan = await refinePlanTakes({
+        plan: renderPlan,
+        peaksByCamera,
+        windows: windowByCamera,
+        dir,
+        extractFrame: extractJpegFrameAt,
+      });
+      timings.takeJudgeMs = Date.now() - judgeStarted;
+      log.info(
+        {
+          ...jobLog,
+          takes: renderPlan.scenes.map(
+            (scene) => `C${scene.position}:${scene.source_start_offset.toFixed(1)}s`,
+          ),
+          ms: timings.takeJudgeMs,
+        },
+        'take judge',
+      );
+      renderPlan = keepPictureJoins({
+        ...renderPlan,
+        scenes: lockScenesToLiveSubject(
+          renderPlan.scenes,
+          (scene) => sourceByCamera.get(scene.position),
+          { containAll: payload.program === 'casa' },
+        ),
+      });
+      if (shouldAssignStrategicFx(payload.program, renderPlan.scenes)) {
+        renderPlan = assignStrategicFxAndSpeed({
+          plan: renderPlan,
+          catalog: loadFxCatalogFromDisk().assets,
+          peaksByCamera,
+          outputSeconds: renderPlan.duration,
+        });
+      }
     }
-    const branding = playbook.branding ?? defaultBrandingFor(payload.program);
+    const brandingRaw = playbook.branding ?? defaultBrandingFor(payload.program);
+    const branding = payload.program === 'casa' ? { ...brandingRaw, title: false } : brandingRaw;
     const safeCaption = groundedCaption({
       caption: renderPlan.caption,
       visionReason: [plan.reason, ...(plan.cameraRankings ?? []).map((row) => row.reason)].join(
@@ -681,7 +721,7 @@ async function processClaimedVideo(
       }
     }
     const captions = await writeProgramAss(dir, renderPlan.duration, {
-      caption: safeCaption,
+      caption: renderPlan.captionStrategy === 'full' ? safeCaption : null,
       title: branding.title ? copy.title : null,
       lowerThird: branding.lowerThird ? copy.lowerThird : null,
       cta: branding.cta ? copy.cta : null,
@@ -799,6 +839,13 @@ async function processClaimedVideo(
     await setStatus(payload.tenantId, payload.reelId, 'rendering', 82, 'Verificando qualidade');
     const probe = await probeMedia(output);
     await assertPictureThroughout(output, probe.durationSeconds ?? renderPlan.duration);
+    await judgeFinishedMp4({
+      program: payload.program,
+      mp4: output,
+      durationSeconds: probe.durationSeconds ?? renderPlan.duration,
+      dir,
+      extractFrame: extractJpegFrameAt,
+    });
     const technical = evaluateTechnicalQuality(probe, {
       videoCodec: 'h264',
       pixFmt: 'yuv420p',
@@ -1020,6 +1067,7 @@ async function processClaimedVideo(
       'SKIP_PROGRAM',
       'TECHNICAL_QC',
       'COMPOSITION_QC',
+      'TAKE_JUDGE_FAILED',
       'DIRECTOR_INVALID_OUTPUT',
       'DIRECTOR_INVALID_REFERENCE',
       'COMPOSITION_UNAVAILABLE',

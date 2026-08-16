@@ -5,6 +5,7 @@ import {
   snapPlaybackSpeed,
   energyAt,
   sectionAt,
+  type EditProgram,
   type FxAsset,
   type MusicAnalysis,
 } from '@reelops/shared';
@@ -130,4 +131,14 @@ export function assignStrategicFxAndSpeed(input: {
     input.outputSeconds,
   );
   return { ...input.plan, scenes: budgeted };
+}
+
+export function shouldAssignStrategicFx(
+  program: EditProgram,
+  scenes: Array<{ fxMode?: 'none' | 'auto' }>,
+) {
+  return (
+    (program === 'oficio' || program === 'assinatura' || program === 'pulso') &&
+    scenes.some((scene) => scene.fxMode === 'auto')
+  );
 }

@@ -102,12 +102,16 @@ describe('validated four-program standard', () => {
     expect(real.some((item) => item.id === 'masked_reveal')).toBe(false);
   });
 
-  it('burns title and logo on every validated program', () => {
-    for (const program of ['casa', 'oficio', 'assinatura', 'pulso'] as const) {
+  it('burns title and logo on Oficio, Assinatura and Pulso; Casa keeps logo without the generic title', () => {
+    for (const program of ['oficio', 'assinatura', 'pulso'] as const) {
       expect(validatedProgramPresets[program].branding.title).toBe(true);
       expect(validatedProgramPresets[program].branding.logo).toBe(true);
       expect(validatedProgramPresets[program].branding.endCard).toBe(true);
     }
+    expect(validatedProgramPresets.casa.branding.title).toBe(false);
+    expect(validatedProgramPresets.casa.branding.logo).toBe(true);
+    expect(validatedProgramPresets.casa.branding.endCard).toBe(true);
+    expect(validatedProgramPresets.casa.captions.strategy).toBe('none');
     expect(validatedProgramPresets.oficio.branding.lowerThird).toBe(true);
     expect(validatedProgramPresets.pulso.branding.cta).toBe(true);
   });
@@ -119,11 +123,11 @@ describe('validated four-program standard', () => {
     expect(copy.cta).toBe('Peça no salão');
   });
 
-  it('fills title and logo when an old published spec omitted branding', () => {
+  it('fills logo when an old published Casa spec omitted branding, without turning the title on', () => {
     const { branding, ...legacy } = validatedProgramPresets.casa;
-    expect(branding.title).toBe(true);
+    expect(branding.title).toBe(false);
     const parsed = programPresetSpecSchema.parse(legacy);
-    expect(parsed.branding.title).toBe(true);
+    expect(parsed.branding.title).toBe(false);
     expect(parsed.branding.logo).toBe(true);
     expect(parsed.branding.endCard).toBe(true);
   });

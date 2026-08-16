@@ -117,6 +117,9 @@ describe('LegacyReelPlannerAdapter', () => {
           transition: 'fadeblack',
           punchIn: true,
           motion: 'punch' as const,
+          joinOverlay: 'leak' as const,
+          fxAssetId: 'lens-01',
+          fxMode: 'auto' as const,
         },
       ],
     });
@@ -124,6 +127,9 @@ describe('LegacyReelPlannerAdapter', () => {
     expect(next.scenes.map((scene) => scene.transition)).toEqual(['cut', 'dissolve']);
     expect(next.scenes[1]?.punchIn).toBe(false);
     expect(next.scenes[1]?.motion).toBe('none');
+    expect(next.scenes[1]?.joinOverlay).toBeUndefined();
+    expect(next.scenes[1]?.fxAssetId).toBeUndefined();
+    expect(next.scenes[1]?.fxMode).toBe('none');
   });
 
   it('leaves Pulso fadeblack alone', () => {

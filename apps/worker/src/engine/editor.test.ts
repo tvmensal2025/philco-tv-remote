@@ -159,11 +159,15 @@ describe('four-program editor', () => {
     expect(plan.scenes.every((scene) => scene.role === 'food')).toBe(true);
   });
 
-  it('spreads high-quality single-camera Casa takes across the available window', () => {
+  it('clusters high-quality single-camera Casa takes around the live peak instead of touring the window', () => {
     const plan = compileProgram({
-      clips: clips().map((clip) => ({ ...clip, windowDurationSeconds: 38 })),
+      clips: clips().map((clip) => ({
+        ...clip,
+        startOffsetSeconds: 0,
+        windowDurationSeconds: 240,
+      })),
       program: 'casa',
-      peaksByCamera: new Map(),
+      peaksByCamera: new Map([['cam-1', [{ offsetSeconds: 18, fusedScore: 92 }]]]),
       cameraScores: new Map([
         [1, 88],
         [2, 12],
@@ -177,8 +181,9 @@ describe('four-program editor', () => {
     const span = Math.max(...starts) - Math.min(...starts);
     expect(plan.scenes.every((scene) => scene.position === 1)).toBe(true);
     expect(plan.scenes.length).toBeGreaterThanOrEqual(4);
-    expect(span).toBeGreaterThan(15);
-    expect(Math.max(...starts)).toBeGreaterThan(20);
+    expect(span).toBeLessThan(55);
+    expect(Math.max(...starts)).toBeLessThan(70);
+    expect(plan.captionStrategy).toBe('none');
     expect(plan.duration).toBeGreaterThan(14);
     expect(plan.duration).toBeLessThan(70);
   });
@@ -212,7 +217,8 @@ describe('four-program editor', () => {
       compatiblePositions: new Set([1]),
     });
     const starts = plan.scenes.map((scene) => scene.source_start_offset);
-    expect(Math.max(...starts) - Math.min(...starts)).toBeGreaterThan(15);
+    expect(plan.scenes.every((scene) => scene.position === 1)).toBe(true);
+    expect(Math.max(...starts) - Math.min(...starts)).toBeLessThan(32);
   });
 
   it('keeps weak single-camera takes near the start of the window', () => {
@@ -268,5 +274,20 @@ describe('four-program editor', () => {
     });
     expect(plan.scenes[0]?.duration).toBeLessThan(1.5);
     expect(playbookFor('pulso').beats[0]?.durationSeconds).toBeCloseTo(1.9);
+  });
+
+  it('copies beat fxAssetId and fxMode onto the Oficio plan', () => {
+    const override = playbookFor('oficio');
+    override.beats = override.beats.map((beat, index) =>
+      index === 1 ? { ...beat, fxAssetId: 'whoosh-01', fxMode: 'auto' as const } : beat,
+    );
+    const plan = compileProgram({
+      clips: clips(),
+      program: 'oficio',
+      peaksByCamera: peaks(),
+      playbook: override,
+    });
+    expect(plan.scenes.some((scene) => scene.fxAssetId === 'whoosh-01')).toBe(true);
+    expect(plan.scenes.some((scene) => scene.fxMode === 'auto')).toBe(true);
   });
 });

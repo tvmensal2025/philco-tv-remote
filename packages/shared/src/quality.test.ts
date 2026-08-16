@@ -93,6 +93,8 @@ describe('failure classification', () => {
     expect(shouldRetryJob(classifyJobFailure('REDIS ECONNREFUSED'))).toBe(true);
     expect(classifyJobFailure('TECHNICAL_QC:EMPTY_FILE')).toBe('QUALITY_FAILURE');
     expect(shouldRetryJob(classifyJobFailure('TECHNICAL_QC:EMPTY_FILE'))).toBe(false);
+    expect(classifyJobFailure('TAKE_JUDGE_FAILED:mesas')).toBe('QUALITY_FAILURE');
+    expect(shouldRetryJob(classifyJobFailure('TAKE_JUDGE_FAILED:mesas'))).toBe(false);
     expect(classifyJobFailure('DIRECTOR_INVALID_OUTPUT')).toBe('PROVIDER_ERROR');
   });
 });

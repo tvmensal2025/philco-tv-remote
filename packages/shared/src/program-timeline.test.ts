@@ -59,7 +59,7 @@ describe('program timeline editor', () => {
     expect(beatScale(insert!, insert!.durationSeconds)).toBeCloseTo(1.11);
     const start = previewAtTime(casa, 0);
     expect(start?.outgoing.opacity).toBe(0);
-    expect(start?.captionVisible).toBe(true);
+    expect(start?.captionVisible).toBe(false);
     const afterFade = previewAtTime(casa, 0.7);
     expect(afterFade?.outgoing.opacity).toBeCloseTo(1);
     expect(afterFade?.joinOverlay).toBeNull();
@@ -87,7 +87,7 @@ describe('program timeline editor', () => {
     expect(mid?.fadeBlack).toBe(0);
   });
 
-  it('keeps the first 1.6s of Casa clean, then shows title; end card at the close', () => {
+  it('keeps Casa title off; logo on; end card at the close', () => {
     const casa = cloneValidatedSpec('casa');
     const { duration } = buildProgramTimeline(casa);
     const hook = previewAtTime(casa, 1.2);
@@ -95,7 +95,7 @@ describe('program timeline editor', () => {
     const close = previewAtTime(casa, duration - 0.4);
     expect(hook?.branding.title).toBe(false);
     expect(hook?.branding.logo).toBe(true);
-    expect(titled?.branding.title).toBe(true);
+    expect(titled?.branding.title).toBe(false);
     expect(close?.branding.endCard).toBe(true);
     expect(close?.branding.title).toBe(false);
   });
