@@ -59,15 +59,9 @@ describe('finish graph', () => {
     expect(joinProfileFor('casa', 'standard')).toBe('high');
     expect(joinProfileFor('casa', 'safe')).toBe('safe');
     expect(joinProfileFor('oficio', 'standard')).toBe('standard');
-    expect(
-      usesHardCutJoins(
-        [
-          { duration: 12, transition: 'dissolve' },
-          { duration: 12, transition: 'dissolve' },
-        ],
-        'high',
-      ),
-    ).toBe(false);
+    expect(usesHardCutJoins([{ transition: 'dissolve' }, { transition: 'dissolve' }], 'high')).toBe(
+      false,
+    );
   });
 
   it('treats unknown joins as almost-hard cuts, not concat', () => {
