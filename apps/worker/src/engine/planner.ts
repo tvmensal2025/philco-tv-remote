@@ -4,6 +4,7 @@ import { coverageReport } from './coverage.js';
 import {
   HIGH_QUALITY_CAMERA_SCORE,
   clusterPreferredStart,
+  nextClusterOffset,
   snapTake,
   spreadPreferredStart,
   type PeakHit,
@@ -83,6 +84,8 @@ export type HouseCutTake = {
   cropMode: 'crop' | 'pad_blur' | null;
   camera: string;
   duration: number;
+  sourceIn?: number;
+  sourceOut?: number;
 };
 
 /** Casa never dips to black between takes. Punch-in and leak overlays eat the subject. */
@@ -127,6 +130,8 @@ export function houseCutFromPlan(plan: Pick<ReelPlan, 'scenes'>): HouseCutTake[]
     cropMode: scene.cropMode ?? null,
     camera: `C${scene.position}`,
     duration: Number(scene.duration.toFixed(2)),
+    sourceIn: Number(scene.source_start_offset.toFixed(2)),
+    sourceOut: Number((scene.source_start_offset + scene.duration).toFixed(2)),
   }));
 }
 
@@ -255,7 +260,7 @@ export function compileProgram(input: {
             hub: forcedHub,
           }).sort((left, right) => right.fusedScore - left.fusedScore)[0]
         : undefined;
-    const snapped = snapTake({
+    let snapped = snapTake({
       windowStart: clip.startOffsetSeconds,
       windowDuration,
       takeDuration,
@@ -275,6 +280,19 @@ export function compileProgram(input: {
               })
             : undefined,
     });
+    if (!snapped.ok) {
+      const relocated = nextClusterOffset({
+        windowStart: clip.startOffsetSeconds,
+        windowDuration,
+        takeDuration,
+        usedOffsets: usedOffsets.get(clip.cameraId) ?? [],
+        peaks,
+        hub: hubForBeat ?? casaPreferred,
+        hubs: scoutedHubs.length ? scoutedHubs : casaHubs,
+      });
+      if (relocated == null) continue;
+      snapped = { ...snapped, start: relocated, ok: true };
+    }
     if (book.program === 'casa' && casaHubs.length && scenes.length) {
       const previous = scenes.at(-1)!;
       const farJumpsUsed = scenes.filter(

@@ -60,6 +60,29 @@ describe('four-program editor', () => {
     expect(Math.abs(second.start - first.start)).toBeGreaterThanOrEqual(1.5);
   });
 
+  it('does not clamp a second Casa take back onto the same palco start', () => {
+    const first = snapTake({
+      windowStart: 788.433,
+      windowDuration: 12,
+      takeDuration: 12,
+      peaks: [{ offsetSeconds: 788.433, fusedScore: 90 }],
+      preferredStart: 788.433,
+      minStartGap: 8,
+    });
+    const second = snapTake({
+      windowStart: 788.433,
+      windowDuration: 12,
+      takeDuration: 12,
+      peaks: [{ offsetSeconds: 788.433, fusedScore: 90 }],
+      usedOffsets: [first.start],
+      preferredStart: 788.433,
+      minStartGap: 8,
+    });
+    expect(first.ok).toBe(true);
+    expect(second.ok).toBe(false);
+    expect(Math.abs(second.start - first.start)).toBeLessThan(8);
+  });
+
   it('anchors a preferred start across the window when there are no peaks', () => {
     const late = snapTake({
       windowStart: 5,

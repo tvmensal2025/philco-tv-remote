@@ -216,6 +216,7 @@ export function snapTake(input: {
   if (start <= windowStart + 0.05 && peak != null && peak > windowStart + 0.6) {
     start = Math.max(windowStart, peak - takeDuration * 0.35);
   }
+  const collides = usedStarts.some((previous) => Math.abs(start - previous) < minGap);
   const duration = Number(Math.min(takeDuration, Math.max(0.8, windowEnd - start)).toFixed(3));
-  return { start: Number(start.toFixed(3)), duration, peak };
+  return { start: Number(start.toFixed(3)), duration, peak, ok: !collides };
 }
