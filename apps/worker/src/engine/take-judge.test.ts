@@ -4,6 +4,7 @@ import {
   actionFromVerdict,
   judgeFinishedMp4,
   judgeTakeImages,
+  pickScoutedHub,
   refinePlanTakes,
   takeVerdictSchema,
   type TakeVerdict,
@@ -211,5 +212,29 @@ describe('take judge', () => {
     expect(next).not.toBeNull();
     expect(next ?? 0).toBeLessThan(70);
     expect(next ?? 0).not.toBe(210);
+  });
+
+  it('picks the relevant stage hub over a prettier dining-room hub', () => {
+    const chosen = pickScoutedHub([
+      {
+        cameraId: 'cam-1',
+        hub: 210,
+        visualQuality: 94,
+        contentRelevance: 18,
+        subjectInFrame: false,
+        hardReject: false,
+        reason: 'mesas',
+      },
+      {
+        cameraId: 'cam-1',
+        hub: 18,
+        visualQuality: 71,
+        contentRelevance: 88,
+        subjectInFrame: true,
+        hardReject: false,
+        reason: 'cantora',
+      },
+    ]);
+    expect(chosen?.hub).toBe(18);
   });
 });

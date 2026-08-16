@@ -145,6 +145,7 @@ export class ReelPlanner {
       cameraScores?: Map<number, number>;
       editMode?: 'single_camera' | 'dual_camera' | 'multicamera';
       compatiblePositions?: Set<number>;
+      hubByCamera?: Map<string, number>;
     },
   ): Promise<ReelPlan> {
     if (!clips.length) throw new Error('NO_CAMERA_SEGMENTS');
@@ -158,6 +159,7 @@ export class ReelPlanner {
       cameraScores: extras?.cameraScores,
       editMode: extras?.editMode,
       compatiblePositions: extras?.compatiblePositions,
+      hubByCamera: extras?.hubByCamera,
     });
   }
 }
@@ -171,6 +173,7 @@ export function compileProgram(input: {
   cameraScores?: Map<number, number>;
   editMode?: 'single_camera' | 'dual_camera' | 'multicamera';
   compatiblePositions?: Set<number>;
+  hubByCamera?: Map<string, number>;
 }): ReelPlan {
   const clips = input.clips.map((clip) => ({
     ...clip,
@@ -208,6 +211,7 @@ export function compileProgram(input: {
     if (!clip) continue;
     const windowDuration = clip.windowDurationSeconds ?? book.targetDuration;
     const peaks = beat.preferPeak === false ? [] : (input.peaksByCamera.get(clip.cameraId) ?? []);
+    const forcedHub = input.hubByCamera?.get(clip.cameraId);
     const casaPreferred = clusterPreferredStart({
       windowStart: clip.startOffsetSeconds,
       windowDuration,
@@ -215,6 +219,7 @@ export function compileProgram(input: {
       index: beatIndex,
       count: book.beats.length,
       peaks,
+      hub: forcedHub,
     });
     const hookCandidate =
       book.program === 'casa' && beatIndex === 0
@@ -224,6 +229,7 @@ export function compileProgram(input: {
             windowDuration,
             peaks,
             takeDuration: beat.durationSeconds,
+            hub: forcedHub,
           }).sort((left, right) => right.fusedScore - left.fusedScore)[0]
         : undefined;
     const snapped = snapTake({

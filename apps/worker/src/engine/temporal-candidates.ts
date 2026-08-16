@@ -16,13 +16,16 @@ export function temporalCandidatesFromPeaks(input: {
   windowDuration: number;
   peaks: PeakHit[];
   takeDuration: number;
+  hub?: number;
 }): TemporalCandidate[] {
-  const hub = clusterHub({
-    windowStart: input.windowStart,
-    windowDuration: input.windowDuration,
-    takeDuration: input.takeDuration,
-    peaks: input.peaks,
-  });
+  const hub =
+    input.hub ??
+    clusterHub({
+      windowStart: input.windowStart,
+      windowDuration: input.windowDuration,
+      takeDuration: input.takeDuration,
+      peaks: input.peaks,
+    });
   const radius = CASA_CLUSTER_SPAN_SECONDS / 2;
   const take = Math.max(2.4, Math.min(14, input.takeDuration));
   return [...input.peaks]

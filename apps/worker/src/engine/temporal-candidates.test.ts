@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { distinctClusterHubs } from './peak-snap.js';
 import { pairCompatibility, temporalCandidatesFromPeaks } from './temporal-candidates.js';
 
 describe('temporal candidates', () => {
@@ -18,6 +19,21 @@ describe('temporal candidates', () => {
     expect(rows.every((row) => row.end - row.start >= 1.6)).toBe(true);
     expect(Math.max(...rows.map((row) => row.start))).toBeLessThan(70);
     expect(rows.some((row) => row.peak === 210)).toBe(false);
+  });
+
+  it('keeps a far dining-room spike as a second hub instead of hiding the stage', () => {
+    const hubs = distinctClusterHubs({
+      windowStart: 0,
+      windowDuration: 240,
+      takeDuration: 12,
+      peaks: [
+        { offsetSeconds: 18, fusedScore: 70 },
+        { offsetSeconds: 22, fusedScore: 68 },
+        { offsetSeconds: 210, fusedScore: 99 },
+      ],
+    });
+    expect(hubs.some((hub) => hub < 50)).toBe(true);
+    expect(hubs.some((hub) => hub > 150)).toBe(true);
   });
 
   it('marks a far jump as incompatible on the same camera', () => {

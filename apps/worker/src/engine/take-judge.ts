@@ -58,6 +58,25 @@ export type ReelPublishVerdict = z.infer<typeof reelPublishVerdictSchema>;
 
 export type TakeJudgeAsk = (input: { images: Buffer[]; prompt: string }) => Promise<unknown>;
 
+export class TakeJudgeError extends Error {
+  readonly reports: TakeJudgeReport[];
+  constructor(reason: string, reports: TakeJudgeReport[] = []) {
+    super(`TAKE_JUDGE_FAILED:${reason}`);
+    this.name = 'TakeJudgeError';
+    this.reports = reports;
+  }
+}
+
+export type HubScoutReport = {
+  cameraId: string;
+  hub: number;
+  visualQuality: number;
+  contentRelevance: number;
+  subjectInFrame: boolean;
+  hardReject: boolean;
+  reason: string;
+};
+
 export function isTakeJudgeConfigured() {
   return (
     pickVisionProvider({
@@ -111,6 +130,63 @@ export function hookScore(
   subjectInFrame: boolean,
 ) {
   return Math.round(visualQuality * 0.3 + contentRelevance * 0.5 + (subjectInFrame ? 20 : 0));
+}
+
+export function pickScoutedHub(reports: HubScoutReport[]): HubScoutReport | null {
+  const eligible = reports
+    .filter((row) => !row.hardReject && row.contentRelevance >= EDITORIAL.minContentRelevance)
+    .sort(
+      (left, right) =>
+        right.contentRelevance - left.contentRelevance || right.visualQuality - left.visualQuality,
+    );
+  return eligible[0] ?? null;
+}
+
+export async function scoutClusterHubs(input: {
+  program: EditProgram;
+  cameraId: string;
+  sourcePath: string;
+  hubs: number[];
+  dir: string;
+  extractFrame: (source: string, atSeconds: number, dest: string) => Promise<unknown>;
+  readJpeg?: (file: string) => Promise<Buffer>;
+  ask?: TakeJudgeAsk;
+}): Promise<HubScoutReport[]> {
+  if (!input.ask && !isTakeJudgeConfigured()) return [];
+  const readJpeg = input.readJpeg ?? ((file: string) => readFile(file));
+  const reports: HubScoutReport[] = [];
+  for (const [index, hub] of input.hubs.entries()) {
+    const at = Math.max(0, hub + 0.6);
+    const dest = path.join(input.dir, `hub-scout-${input.cameraId}-${index}.jpg`);
+    await input.extractFrame(input.sourcePath, at, dest);
+    const jpeg = await readJpeg(dest);
+    const verdict = await judgeTakeImages({
+      program: input.program,
+      images: [jpeg],
+      takeIndex: 0,
+      takeCount: 1,
+      ask: input.ask,
+    });
+    const visual = verdict.visualQuality ?? (verdict.publishable ? 70 : 40);
+    const relevance =
+      verdict.contentRelevance ?? (verdict.subjectInFrame && verdict.publishable ? 80 : 18);
+    const code = verdict.rejectCode ?? (verdict.blackFrame ? 'black' : 'none');
+    reports.push({
+      cameraId: input.cameraId,
+      hub,
+      visualQuality: visual,
+      contentRelevance: relevance,
+      subjectInFrame: verdict.subjectInFrame,
+      hardReject:
+        verdict.blackFrame ||
+        verdict.hardReject === true ||
+        code === 'black' ||
+        code === 'watermark' ||
+        code === 'unusable',
+      reason: verdict.reason,
+    });
+  }
+  return reports;
 }
 
 export function takeJudgePrompt(input: {
@@ -200,6 +276,7 @@ export async function refinePlanTakes(input: {
   extractFrame: (source: string, atSeconds: number, dest: string) => Promise<unknown>;
   readJpeg?: (file: string) => Promise<Buffer>;
   ask?: TakeJudgeAsk;
+  hubByCamera?: Map<string, number>;
 }): Promise<{ plan: ReelPlan; reports: TakeJudgeReport[] }> {
   if (!input.ask && !isTakeJudgeConfigured()) {
     return { plan: input.plan, reports: [] };
@@ -217,12 +294,14 @@ export async function refinePlanTakes(input: {
       duration: Math.max(scene.duration, 8),
     };
     const peaks = input.peaksByCamera.get(scene.camera_id) ?? [];
-    const hub = clusterHub({
-      windowStart: window.start,
-      windowDuration: window.duration,
-      takeDuration: scene.duration,
-      peaks,
-    });
+    const hub =
+      input.hubByCamera?.get(scene.camera_id) ??
+      clusterHub({
+        windowStart: window.start,
+        windowDuration: window.duration,
+        takeDuration: scene.duration,
+        peaks,
+      });
     let replacements = 0;
     let current = scene;
     for (;;) {
@@ -283,7 +362,7 @@ export async function refinePlanTakes(input: {
       rejectedStarts.add(current.source_start_offset.toFixed(2));
       if (action === 'fail') {
         reports.push(report);
-        throw new Error(`TAKE_JUDGE_FAILED:${verdict.reason}`);
+        throw new TakeJudgeError(verdict.reason, reports);
       }
       const nextStart = nextClusterOffset({
         windowStart: window.start,
@@ -302,7 +381,7 @@ export async function refinePlanTakes(input: {
       reports.push(report);
       if (nextStart == null || rejectedStarts.has(nextStart.toFixed(2))) {
         reports.push({ ...report, action: 'fail', decision: 'REJECT', hardReject: true });
-        throw new Error(`TAKE_JUDGE_FAILED:${verdict.reason}`);
+        throw new TakeJudgeError(verdict.reason, reports);
       }
       replacements += 1;
       current = { ...current, source_start_offset: nextStart };
@@ -340,7 +419,7 @@ export async function judgeFinishedMp4(input: {
     ask: input.ask,
   });
   if (!verdict.publishable || verdict.wrongScene) {
-    throw new Error(`TAKE_JUDGE_FAILED:${verdict.reason}`);
+    throw new TakeJudgeError(verdict.reason);
   }
   return verdict;
 }

@@ -87,7 +87,11 @@ import {
   resolveTimeline,
 } from '../engine/scene-resolver.js';
 import { applyCompiledGraph } from '../engine/project-plan.js';
-import { HIGH_QUALITY_CAMERA_SCORE } from '../engine/peak-snap.js';
+import {
+  distinctClusterHubs,
+  HIGH_QUALITY_CAMERA_SCORE,
+  type PeakHit,
+} from '../engine/peak-snap.js';
 import { casaCompositionLayout } from '../composition/design-system.js';
 import { writeProgramAss } from './captions.js';
 import { runVisualQc } from './visual-qc.js';
@@ -103,12 +107,19 @@ import { db, log } from '../services.js';
 import { workerId } from '../worker-id.js';
 import { houseCutFromPlan, keepPictureJoins, ReelPlanner } from '../engine/planner.js';
 import { assignStrategicFxAndSpeed, shouldAssignStrategicFx } from '../engine/fx-pass.js';
-import { judgeFinishedMp4, refinePlanTakes, type TakeJudgeReport } from '../engine/take-judge.js';
-import { EDITORIAL_RELEASE } from '../engine/editorial-thresholds.js';
+import {
+  judgeFinishedMp4,
+  pickScoutedHub,
+  refinePlanTakes,
+  scoutClusterHubs,
+  TakeJudgeError,
+  type HubScoutReport,
+  type TakeJudgeReport,
+} from '../engine/take-judge.js';
+import { EDITORIAL, EDITORIAL_RELEASE } from '../engine/editorial-thresholds.js';
 import { pairCompatibility } from '../engine/temporal-candidates.js';
 import { workerDescriptor } from '../engine/worker-descriptor.js';
 import { loadPublishedPlaybook } from '../engine/program-presets.js';
-import type { PeakHit } from '../engine/peak-snap.js';
 import type { StyleName } from '../engine/rhythm.js';
 
 export async function processVideo(job: Job<VideoJob>) {
@@ -151,6 +162,8 @@ async function processClaimedVideo(
   const dir = await mkdtemp(path.join(config.WORK_DIR, 'job-'));
   const timings: Record<string, number> = {};
   let takeJudgeReports: TakeJudgeReport[] = [];
+  let hubScoutReports: HubScoutReport[] = [];
+  const hubByCamera = new Map<string, number>();
   try {
     await setStatus(
       payload.tenantId,
@@ -263,7 +276,7 @@ async function processClaimedVideo(
         try {
           const duration = clip.windowDurationSeconds ?? requestedDuration;
           const peaks = await scanSegment(clip.localPath, duration, {
-            maxPeaks: 8,
+            maxPeaks: payload.program === 'casa' ? 16 : 8,
             fast: true,
             startSeconds: clip.startOffsetSeconds,
           });
@@ -283,6 +296,53 @@ async function processClaimedVideo(
         }
       }),
     );
+    if (payload.program === 'casa') {
+      const scoutStarted = Date.now();
+      for (const clip of clips) {
+        const peaks = peaksByCamera.get(clip.cameraId) ?? [];
+        const hubs = distinctClusterHubs(
+          {
+            windowStart: clip.startOffsetSeconds,
+            windowDuration: clip.windowDurationSeconds ?? requestedDuration,
+            takeDuration: 12,
+            peaks,
+          },
+          EDITORIAL.maxScoutHubs,
+        );
+        const reports = await scoutClusterHubs({
+          program: payload.program,
+          cameraId: clip.cameraId,
+          sourcePath: clip.localPath,
+          hubs,
+          dir,
+          extractFrame: extractJpegFrameAt,
+        });
+        hubScoutReports.push(...reports);
+        const chosen = pickScoutedHub(reports);
+        if (chosen) hubByCamera.set(clip.cameraId, chosen.hub);
+      }
+      timings.hubScoutMs = Date.now() - scoutStarted;
+      log.info(
+        {
+          ...jobLog,
+          hubs: hubScoutReports.map((row) => ({
+            hub: row.hub,
+            quality: row.visualQuality,
+            relevance: row.contentRelevance,
+            reason: row.reason,
+          })),
+          chosen: [...hubByCamera.entries()],
+          ms: timings.hubScoutMs,
+        },
+        'cluster hub scout',
+      );
+      if (hubScoutReports.length && !hubByCamera.size) {
+        throw new TakeJudgeError(
+          hubScoutReports.sort((left, right) => right.contentRelevance - left.contentRelevance)[0]
+            ?.reason ?? 'no relevant cluster',
+        );
+      }
+    }
     const playbook = await loadPublishedPlaybook(payload.program);
     let cameraRank: Awaited<ReturnType<typeof inspectCameras>> = [];
     if (config.ENABLE_MULTICAMERA_RANKER && (isYoloConfigured() || framePaths.length)) {
@@ -342,6 +402,7 @@ async function processClaimedVideo(
                 : undefined,
             editMode: nextEditorial.recommendedMode,
             compatiblePositions: new Set(nextWorking.map((clip) => clip.position)),
+            hubByCamera,
           }),
         };
       });
@@ -662,6 +723,7 @@ async function processClaimedVideo(
         windows: windowByCamera,
         dir,
         extractFrame: extractJpegFrameAt,
+        hubByCamera,
       });
       renderPlan = judged.plan;
       takeJudgeReports = judged.reports;
@@ -951,6 +1013,7 @@ async function processClaimedVideo(
         release_stamp: EDITORIAL_RELEASE,
         worker: workerDescriptor(),
         take_judge: takeJudgeReports,
+        hub_scout: hubScoutReports,
         cameras: renderPlan.scenes.map((scene) => scene.camera_id),
         sourceAudio: Boolean(renderPlan.audio),
         music_bed: musicBed
@@ -1107,6 +1170,7 @@ async function processClaimedVideo(
     const attempts = Number(job.opts.attempts ?? 1);
     const finalAttempt = job.attemptsMade + 1 >= attempts;
     const message = error instanceof Error ? error.message : 'Erro desconhecido';
+    if (error instanceof TakeJudgeError) takeJudgeReports = error.reports;
     if (message === 'JOB_NOT_PROCESSABLE' || message === 'STALE_EXECUTION') {
       throw new UnrecoverableError(message);
     }
@@ -1129,6 +1193,13 @@ async function processClaimedVideo(
       await setStatus(payload.tenantId, payload.reelId, 'failed', 0, 'Falha no processamento', {
         error_code: message.split(':')[0],
         error_message: message,
+        metadata: {
+          release_stamp: EDITORIAL_RELEASE,
+          worker: workerDescriptor(),
+          take_judge: takeJudgeReports,
+          hub_scout: hubScoutReports,
+          timings,
+        },
       });
     } else {
       await setStatus(

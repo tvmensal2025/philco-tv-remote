@@ -43,6 +43,56 @@ export function clusterHub(input: {
   return Number(Math.max(windowStart, Math.min(usableEnd, hub)).toFixed(3));
 }
 
+/** Distinct live neighborhoods across a long window — not only the busiest dining-room cluster. */
+export function distinctClusterHubs(
+  input: {
+    windowStart: number;
+    windowDuration: number;
+    takeDuration: number;
+    peaks: PeakHit[];
+  },
+  limit = 4,
+): number[] {
+  const windowStart = Math.max(0, input.windowStart);
+  const windowEnd = windowStart + Math.max(input.takeDuration, input.windowDuration);
+  const usableEnd = Math.max(windowStart, windowEnd - input.takeDuration);
+  const inWindow = [...input.peaks].filter(
+    (peak) => peak.offsetSeconds >= windowStart && peak.offsetSeconds <= windowEnd,
+  );
+  const neighborhood = (peak: PeakHit) =>
+    inWindow
+      .filter(
+        (other) =>
+          Math.abs(other.offsetSeconds - peak.offsetSeconds) <= CASA_CLUSTER_SPAN_SECONDS / 2,
+      )
+      .reduce((sum, other) => sum + other.fusedScore, 0);
+  const ranked = [...inWindow].sort(
+    (left, right) => neighborhood(right) - neighborhood(left) || right.fusedScore - left.fusedScore,
+  );
+  const hubs: number[] = [];
+  const consider = (offset: number) => {
+    const clamped = Number(Math.max(windowStart, Math.min(usableEnd, offset)).toFixed(3));
+    if (hubs.some((hub) => Math.abs(hub - clamped) < CASA_CLUSTER_SPAN_SECONDS)) return;
+    hubs.push(clamped);
+  };
+  for (const peak of ranked) {
+    consider(peak.offsetSeconds);
+    if (hubs.length >= limit) return hubs;
+  }
+  const thirds = 3;
+  for (let index = 0; index < thirds; index += 1) {
+    const from = windowStart + (input.windowDuration * index) / thirds;
+    const to = windowStart + (input.windowDuration * (index + 1)) / thirds;
+    const local = inWindow
+      .filter((peak) => peak.offsetSeconds >= from && peak.offsetSeconds < to)
+      .sort((left, right) => right.fusedScore - left.fusedScore)[0];
+    if (local) consider(local.offsetSeconds);
+    if (hubs.length >= limit) return hubs;
+  }
+  if (!hubs.length) consider(windowStart + Math.min(1.2, input.windowDuration * 0.25));
+  return hubs;
+}
+
 /** Keep Casa takes on the same stage instead of touring a long capture window. */
 export function clusterPreferredStart(input: {
   windowStart: number;
@@ -51,8 +101,9 @@ export function clusterPreferredStart(input: {
   index: number;
   count: number;
   peaks: PeakHit[];
+  hub?: number;
 }) {
-  const hub = clusterHub(input);
+  const hub = input.hub ?? clusterHub(input);
   const gap = Math.max(1.5, input.takeDuration * 0.45);
   const startSpan = Math.min(
     CASA_CLUSTER_SPAN_SECONDS,
