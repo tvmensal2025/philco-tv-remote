@@ -7,6 +7,8 @@ import {
   isStandingDeliveryCrop,
   lockScenesToLiveSubject,
   mapBoxToFrame,
+  openReelsCrop,
+  pickOpenStageSubject,
   pickStandingSubject,
 } from './crop.js';
 
@@ -100,6 +102,42 @@ describe('containSubjectCrop', () => {
     ]);
     expect(picked).toEqual({ x: 380, y: 140, w: 220, h: 520 });
   });
+
+  it('picks the leftmost standing person for an open Reels crop', () => {
+    const picked = pickOpenStageSubject([
+      { bbox: [720, 80, 200, 540], is_full_body: true },
+      { bbox: [120, 60, 220, 580], is_full_body: true },
+      { bbox: [500, 400, 360, 220], is_full_body: false },
+    ]);
+    expect(picked).toEqual({ x: 120, y: 60, w: 220, h: 580 });
+  });
+});
+
+describe('openReelsCrop', () => {
+  it('cuts a 9:16 window on a left-stage singer instead of letterboxing the dining room', () => {
+    const crop = openReelsCrop({
+      frameWidth: 1280,
+      frameHeight: 720,
+      subject: { x: 120, y: 60, w: 360, h: 640 },
+    });
+    expect(crop.mode).toBe('crop');
+    expect(crop.tight).toBe(false);
+    const [x, y, w, h] = crop.bbox;
+    expect(y).toBe(0);
+    expect(h).toBe(720);
+    expect(w).toBeLessThanOrEqual(410);
+    expect(w / h).toBeCloseTo(9 / 16, 1);
+    expect(x).toBeLessThanOrEqual(120);
+    expect(x + w).toBeGreaterThanOrEqual(120 + 360);
+    expect(x + w).toBeLessThanOrEqual(1280);
+  });
+
+  it('falls back to a stage-left 9:16 when nobody is detected', () => {
+    const crop = openReelsCrop({ frameWidth: 1280, frameHeight: 720 });
+    expect(crop.mode).toBe('crop');
+    expect(crop.bbox[0]).toBe(0);
+    expect(crop.bbox[2]).toBeLessThanOrEqual(410);
+  });
 });
 
 describe('isDeliverySourceCrop', () => {
@@ -156,7 +194,24 @@ describe('lockScenesToLiveSubject', () => {
     expect(locked.every((scene) => scene.cropFilter === undefined)).toBe(true);
   });
 
-  it('contains every Casa take even when a standing 9:16 exists', () => {
+  it('keeps Casa Reels on a 9:16 stage crop instead of letterboxing the wide frame', () => {
+    const locked = lockScenesToLiveSubject(
+      [
+        {
+          camera_id: 'c1',
+          crop: [204, 0, 406, 720],
+          cropMode: 'crop' as const,
+        },
+      ],
+      () => frame,
+      { forceReels: true },
+    );
+    expect(locked[0]?.cropMode).toBe('crop');
+    expect(locked[0]?.crop).toEqual([204, 0, 406, 720]);
+    expect(cropNeedsPadBlur({ crop: locked[0]?.crop })).toBe(false);
+  });
+
+  it('contains every take when containAll is set', () => {
     const locked = lockScenesToLiveSubject(
       [
         {

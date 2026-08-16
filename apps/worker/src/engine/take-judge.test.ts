@@ -325,7 +325,7 @@ it('keeps the approved hook and drops later dining takes instead of failing the 
 });
 
 it('trims a kept Casa take to the usable stage window instead of padding 12s', () => {
-  expect(trimKeptDuration(12, 1, 'casa')).toBeLessThanOrEqual(8.5);
+  expect(trimKeptDuration(12, 1, 'casa')).toBe(12);
   expect(trimKeptDuration(12, 0.5, 'casa')).toBe(6);
   expect(trimKeptDuration(12, 1, 'oficio')).toBe(12);
 });

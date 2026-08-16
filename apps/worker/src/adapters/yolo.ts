@@ -5,6 +5,8 @@ import {
   containSubjectCrop,
   cropNeedsPadBlur,
   mapBoxToFrame,
+  openReelsCrop,
+  pickOpenStageSubject,
   pickStandingSubject,
   rankCameras,
   type CameraRankInput,
@@ -199,6 +201,7 @@ export async function applyYoloCrops(input: {
   }>;
   framePaths: Array<{ cameraPosition: number; path: string; sceneIndex?: number }>;
   sourceByCamera?: Map<number, SourceSize>;
+  reels?: boolean;
 }) {
   const perTake = input.framePaths.some((frame) => typeof frame.sceneIndex === 'number');
   if (perTake) {
@@ -213,7 +216,9 @@ export async function applyYoloCrops(input: {
         const result = await analyzeFrameFile({ path, mode: yoloModeForRole(scene.role) });
         if (result) results.push(result);
       }
-      const crop = fitSubjectCrop(results, input.sourceByCamera?.get(scene.position));
+      const crop = fitSubjectCrop(results, input.sourceByCamera?.get(scene.position), {
+        reels: input.reels,
+      });
       if (!crop) continue;
       scene.crop = crop.bbox;
       scene.cropMode = crop.mode;
@@ -237,7 +242,9 @@ export async function applyYoloCrops(input: {
       const result = await analyzeFrameFile({ path, mode: yoloModeForRole(scene.role) });
       if (result) results.push(result);
     }
-    const crop = fitSubjectCrop(results, input.sourceByCamera?.get(scene.position));
+    const crop = fitSubjectCrop(results, input.sourceByCamera?.get(scene.position), {
+      reels: input.reels,
+    });
     if (crop) cropByCamera.set(scene.position, crop);
   }
   for (const scene of input.scenes) {
@@ -254,20 +261,44 @@ function isDownscaledAnalysisFrame(frame?: { width?: number; height?: number }) 
   return Boolean(frame?.width && frame.width <= 640);
 }
 
-export function fitSubjectCrop(results: YoloFrameResult[], source?: SourceSize) {
+export function fitSubjectCrop(
+  results: YoloFrameResult[],
+  source?: SourceSize,
+  opts?: { reels?: boolean },
+) {
   for (const result of results) {
     const people = (result.people ?? []).filter((row) => row.bbox?.length === 4);
-    const subject = pickStandingSubject(
-      people.map((row) => ({ bbox: row.bbox, is_full_body: row.is_full_body })),
-    );
+    const subject = opts?.reels
+      ? pickOpenStageSubject(
+          people.map((row) => ({ bbox: row.bbox, is_full_body: row.is_full_body })),
+        )
+      : pickStandingSubject(
+          people.map((row) => ({ bbox: row.bbox, is_full_body: row.is_full_body })),
+        );
     const frame = result.frame;
     if (subject && frame?.width && frame.height) {
       if (!source && isDownscaledAnalysisFrame(frame)) continue;
       const mapped = source ? mapBoxToFrame(subject, frame, source) : subject;
-      const fitted = containSubjectCrop({
-        frameWidth: source?.width ?? frame.width,
-        frameHeight: source?.height ?? frame.height,
-        subject: mapped,
+      const fitted = opts?.reels
+        ? openReelsCrop({
+            frameWidth: source?.width ?? frame.width,
+            frameHeight: source?.height ?? frame.height,
+            subject: mapped,
+          })
+        : containSubjectCrop({
+            frameWidth: source?.width ?? frame.width,
+            frameHeight: source?.height ?? frame.height,
+            subject: mapped,
+          });
+      return { bbox: fitted.bbox, mode: fitted.mode, tight: fitted.tight };
+    }
+  }
+  if (opts?.reels) {
+    const frame = source ?? results.find((row) => row.frame?.width)?.frame;
+    if (frame?.width && frame.height) {
+      const fitted = openReelsCrop({
+        frameWidth: frame.width,
+        frameHeight: frame.height,
       });
       return { bbox: fitted.bbox, mode: fitted.mode, tight: fitted.tight };
     }

@@ -218,11 +218,17 @@ describe('four-program editor', () => {
     expect(starts.some((start) => start < 650)).toBe(true);
     expect(starts.some((start) => start > 750)).toBe(true);
     expect(starts.every((start) => start < 640 || start > 750)).toBe(true);
-    expect(plan.scenes.length).toBeLessThanOrEqual(3);
+    expect(plan.scenes.length).toBeGreaterThanOrEqual(4);
+    expect(plan.duration).toBeGreaterThan(50);
+    expect(plan.duration).toBeLessThan(62);
     const sorted = [...starts].sort((a, b) => a - b);
+    let farJumps = 0;
     for (let index = 1; index < sorted.length; index += 1) {
-      expect(sorted[index]! - sorted[index - 1]!).toBeGreaterThanOrEqual(8);
+      const gap = sorted[index]! - sorted[index - 1]!;
+      expect(gap).toBeGreaterThanOrEqual(8);
+      if (gap > 48) farJumps += 1;
     }
+    expect(farJumps).toBeLessThanOrEqual(1);
   });
 
   it('treats a strong Vision ranking as high-quality even if the editorial score is mid', () => {

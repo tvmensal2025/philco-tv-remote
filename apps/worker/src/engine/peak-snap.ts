@@ -102,9 +102,10 @@ export function clusterPreferredStart(input: {
   count: number;
   peaks: PeakHit[];
   hub?: number;
+  minGap?: number;
 }) {
   const hub = input.hub ?? clusterHub(input);
-  const gap = Math.max(1.5, input.takeDuration * 0.45);
+  const gap = Math.max(input.minGap ?? 1.5, input.takeDuration * 0.45);
   const startSpan = Math.min(
     CASA_CLUSTER_SPAN_SECONDS,
     Math.max(input.takeDuration * 0.5, Math.max(0, input.count - 1) * gap),
@@ -180,6 +181,7 @@ export function snapTake(input: {
   peaks: PeakHit[];
   usedOffsets?: number[];
   preferredStart?: number;
+  minStartGap?: number;
 }): { start: number; duration: number; peak: number | null } {
   const windowStart = Math.max(0, input.windowStart);
   const takeDuration = Math.min(
@@ -206,7 +208,7 @@ export function snapTake(input: {
   const anchor = peak ?? preferred ?? windowStart + Math.min(1.2, input.windowDuration * 0.25);
   let start = anchor - takeDuration * 0.35;
   start = Math.max(windowStart, start);
-  const minGap = Math.max(1.5, takeDuration * 0.45);
+  const minGap = Math.max(input.minStartGap ?? 1.5, takeDuration * 0.45);
   for (const previous of usedStarts) {
     if (Math.abs(start - previous) < minGap) start = previous + minGap;
   }

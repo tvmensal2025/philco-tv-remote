@@ -68,6 +68,25 @@ describe('yolo adapter', () => {
     expect(fitted!.bbox[0] + fitted!.bbox[2]).toBeLessThanOrEqual(1280);
   });
 
+  it('cuts a 9:16 Reels window on a wide singer instead of pad_blur', () => {
+    const fitted = fitSubjectCrop(
+      [
+        {
+          success: true,
+          frame: { width: 480, height: 270 },
+          people: [{ bbox: [45, 22, 135, 240], is_full_body: true }],
+        },
+      ],
+      { width: 1280, height: 720 },
+      { reels: true },
+    );
+    expect(fitted?.mode).toBe('crop');
+    expect(fitted!.bbox[2]).toBeLessThanOrEqual(410);
+    expect(fitted!.bbox[1]).toBe(0);
+    expect(fitted!.bbox[3]).toBe(720);
+    expect(fitted!.bbox[0] + fitted!.bbox[2]).toBeLessThanOrEqual(1280);
+  });
+
   it('does not re-pad an already contained 9:16 YOLO window', () => {
     const fitted = fitSubjectCrop(
       [

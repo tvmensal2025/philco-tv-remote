@@ -139,6 +139,32 @@ function expandBox(box: Box, pad: number, frame: FrameSize): Box {
   return { x, y, w: Math.max(2, right - x), h: Math.max(2, bottom - y) };
 }
 
+/**
+ * Instagram Reels window: always 9:16, full height, never letterbox.
+ * Centers on the subject with open padding — not a face punch-in.
+ */
+export function openReelsCrop(input: {
+  frameWidth: number;
+  frameHeight: number;
+  subject?: Box | null;
+  pad?: number;
+}): SubjectCrop {
+  const frame = { width: input.frameWidth, height: input.frameHeight };
+  const windowW = evenWithin(Math.min(frame.width, frame.height * TARGET_AR), frame.width);
+  const windowH = evenWithin(frame.height, frame.height);
+  const maxX = Math.max(0, frame.width - windowW);
+  let centerX = frame.width / 2;
+  if (input.subject && input.subject.w >= 2 && input.subject.h >= 2) {
+    const padded = expandBox(input.subject, input.pad ?? 0.28, frame);
+    centerX = padded.x + padded.w / 2;
+  } else if (frame.width / Math.max(1, frame.height) > 1.4) {
+    centerX = windowW / 2;
+  }
+  let x = evenFloor(clamp(Math.round(centerX - windowW / 2), 0, maxX));
+  if (x + windowW > frame.width) x = evenFloor(maxX);
+  return { mode: 'crop', bbox: [x, 0, windowW, windowH], tight: false };
+}
+
 /** 9:16 window that contains the subject. If the body is wider than 9:16, pad_blur. */
 export function containSubjectCrop(input: {
   frameWidth: number;
@@ -233,17 +259,47 @@ function containTake<T extends CropLockScene>(scene: T, frame: FrameSize): T {
   };
 }
 
+function reelsTake<T extends CropLockScene>(scene: T, frame: FrameSize): T {
+  const kept = keepStandingTakeCrop(scene, frame);
+  if (kept && kept.cropMode === 'crop' && !cropNeedsPadBlur({ crop: kept.crop })) {
+    return { ...kept, cropMode: 'crop', cropTight: false, cropFilter: undefined };
+  }
+  const box = scene.crop;
+  const personLike =
+    box &&
+    box.length === 4 &&
+    Number(box[2]) < frame.width * 0.55 &&
+    Number(box[3]) > frame.height * 0.35;
+  const subject = personLike
+    ? { x: Number(box[0]), y: Number(box[1]), w: Number(box[2]), h: Number(box[3]) }
+    : { x: 0, y: 0, w: Math.max(2, frame.width * 0.42), h: frame.height };
+  const fitted = openReelsCrop({
+    frameWidth: frame.width,
+    frameHeight: frame.height,
+    subject,
+  });
+  return {
+    ...scene,
+    crop: fitted.bbox,
+    cropMode: 'crop',
+    cropTight: false,
+    cropFilter: undefined,
+  };
+}
+
 /**
- * Never copy a crop across time: the singer moves. Casa 1-cam uses the whole
- * stage (contain). Other programs may keep a 9:16 close only if THIS take is standing.
+ * Never copy a crop across time: the singer moves. Reels (forceReels) always
+ * cut 9:16 on the stage. containAll letterboxes the full wide frame — Casa
+ * delivery must not use that.
  */
 export function lockScenesToLiveSubject<T extends CropLockScene>(
   scenes: T[],
   frameOf: (scene: T) => FrameSize | undefined,
-  opts?: { containAll?: boolean },
+  opts?: { containAll?: boolean; forceReels?: boolean },
 ): T[] {
   return scenes.map((scene) => {
     const frame = frameOf(scene) ?? { width: 1280, height: 720 };
+    if (opts?.forceReels) return reelsTake(scene, frame);
     if (opts?.containAll) return containTake(scene, frame);
     return keepStandingTakeCrop(scene, frame) ?? containTake(scene, frame);
   });
@@ -261,6 +317,27 @@ export function pickStandingSubject(
     return score(b) - score(a);
   });
   const [x, y, w, h] = ranked[0]!.bbox;
+  return { x, y, w, h };
+}
+
+/** Standing person, preferring stage-left over a seated dining blob. */
+export function pickOpenStageSubject(
+  people: Array<{ bbox: [number, number, number, number]; is_full_body?: boolean }>,
+): Box | null {
+  const standing = people.filter((row) => {
+    const [, , w, h] = row.bbox;
+    return h > w * 1.15 || row.is_full_body;
+  });
+  const pool = standing.length ? standing : people;
+  if (!pool.length) return null;
+  const area = (row: (typeof pool)[number]) => row.bbox[2] * row.bbox[3];
+  const biggest = Math.max(...pool.map(area));
+  const visible = pool.filter((row) => area(row) >= biggest * 0.4);
+  const picked = [...visible].sort(
+    (left, right) => left.bbox[0] - right.bbox[0] || area(right) - area(left),
+  )[0];
+  if (!picked) return pickStandingSubject(people);
+  const [x, y, w, h] = picked.bbox;
   return { x, y, w, h };
 }
 

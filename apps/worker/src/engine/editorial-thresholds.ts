@@ -1,5 +1,5 @@
 /** Central editorial gates. Tune here — not inside prompts or TESTE5 special cases. */
-export const EDITORIAL_RELEASE = 'editorial-p2';
+export const EDITORIAL_RELEASE = 'editorial-p3';
 
 export const EDITORIAL = {
   minVisualQuality: 35,
@@ -12,7 +12,7 @@ export const EDITORIAL = {
   maxRepairPasses: 1,
   maxScoutHubs: 4,
   minTakeSeconds: 4.8,
-  maxCasaTakeSeconds: 8.5,
+  maxCasaTakeSeconds: 12,
   minTakeGapSeconds: 8,
   maxFarJumps: 1,
 } as const;

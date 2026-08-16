@@ -205,10 +205,7 @@ export function compileProgram(input: {
       [...(input.hubsByCamera?.values() ?? [])].flat().filter((hub) => Number.isFinite(hub)),
     ),
   ];
-  const beats =
-    book.program === 'casa' && casaHubs.length
-      ? book.beats.slice(0, Math.min(book.beats.length, Math.max(2, casaHubs.length + 1)))
-      : book.beats;
+  const beats = book.beats;
 
   for (const [beatIndex, beat] of beats.entries()) {
     const clip = pickClip(
@@ -229,15 +226,14 @@ export function compileProgram(input: {
     const scoutedHubs =
       input.hubsByCamera?.get(clip.cameraId)?.filter((hub) => Number.isFinite(hub)) ??
       (forcedHub != null ? [forcedHub] : []);
-    const hubForBeat = scoutedHubs.length ? scoutedHubs[beatIndex % scoutedHubs.length] : forcedHub;
-    const indexOnHub = scoutedHubs.length ? Math.floor(beatIndex / scoutedHubs.length) : beatIndex;
-    const countOnHub = scoutedHubs.length
-      ? Math.ceil(beats.length / scoutedHubs.length)
-      : beats.length;
-    const takeDuration =
-      book.program === 'casa' && scoutedHubs.length
-        ? Math.min(beat.durationSeconds, EDITORIAL.maxCasaTakeSeconds)
-        : beat.durationSeconds;
+    const hubSchedule = scoutedHubs.length ? casaHubSchedule(scoutedHubs, beats.length) : [];
+    const hubForBeat = hubSchedule[beatIndex] ?? forcedHub;
+    const countOnHub = hubSchedule.filter((hub) => hub === hubForBeat).length || beats.length;
+    const indexOnHub = Math.max(
+      0,
+      hubSchedule.slice(0, beatIndex + 1).filter((hub) => hub === hubForBeat).length - 1,
+    );
+    const takeDuration = beat.durationSeconds;
     const casaPreferred = clusterPreferredStart({
       windowStart: clip.startOffsetSeconds,
       windowDuration,
@@ -246,6 +242,7 @@ export function compileProgram(input: {
       count: countOnHub,
       peaks,
       hub: hubForBeat,
+      minGap: casaHubs.length ? EDITORIAL.minTakeGapSeconds : undefined,
     });
     const hookCandidate =
       book.program === 'casa' && beatIndex === 0
@@ -264,6 +261,7 @@ export function compileProgram(input: {
       takeDuration,
       peaks,
       usedOffsets: usedOffsets.get(clip.cameraId),
+      minStartGap: casaHubs.length ? EDITORIAL.minTakeGapSeconds : undefined,
       preferredStart:
         book.program === 'casa'
           ? (hookCandidate?.start ?? casaPreferred)
@@ -378,6 +376,19 @@ export function compileProgram(input: {
 
 function skip(role: string): Error {
   return new Error(`SKIP_PROGRAM:MISSING_ROLE:${role}`);
+}
+
+function casaHubSchedule(hubs: number[], beatCount: number) {
+  if (!hubs.length) return [];
+  if (hubs.length === 1) return Array.from({ length: beatCount }, () => hubs[0]!);
+  const base = Math.floor(beatCount / hubs.length);
+  const extra = beatCount % hubs.length;
+  const schedule: number[] = [];
+  for (let index = 0; index < hubs.length; index += 1) {
+    const count = base + (index < extra ? 1 : 0);
+    for (let take = 0; take < count; take += 1) schedule.push(hubs[index]!);
+  }
+  return schedule;
 }
 
 function candidateOf(scene: Pick<ReelPlanScene, 'camera_id' | 'source_start_offset' | 'duration'>) {

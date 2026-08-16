@@ -465,8 +465,8 @@ async function processClaimedVideo(
       }
     }
 
-    const skipSubjectCrop = payload.program === 'casa';
-    if (!skipSubjectCrop && isYoloConfigured() && framePaths.length) {
+    const skipSmartReframe = payload.program === 'casa';
+    if (!skipSmartReframe && isYoloConfigured() && framePaths.length) {
       await setStatus(
         payload.tenantId,
         payload.reelId,
@@ -595,37 +595,7 @@ async function processClaimedVideo(
       ...renderPlan,
       scenes: applyCutSafety(renderPlan.scenes, peaksByCamera, windowByCamera),
     };
-    if (!skipSubjectCrop && isYoloConfigured()) {
-      const yoloStarted = Date.now();
-      const takeFrames: Array<{ cameraPosition: number; path: string; sceneIndex: number }> = [];
-      for (let index = 0; index < renderPlan.scenes.length; index += 1) {
-        const scene = renderPlan.scenes[index]!;
-        const framePath = path.join(dir, `crop-take-${index}.jpg`);
-        try {
-          await extractJpegFrameAt(
-            scene.source_recording_path,
-            scene.source_start_offset + Math.max(0.2, scene.duration * 0.4),
-            framePath,
-          );
-          takeFrames.push({ cameraPosition: scene.position, path: framePath, sceneIndex: index });
-        } catch (error) {
-          log.warn(
-            { ...jobLog, take: index, err: error instanceof Error ? error.message : String(error) },
-            'take crop frame skipped',
-          );
-        }
-      }
-      if (takeFrames.length) {
-        const yolo = await applyYoloCrops({
-          scenes: renderPlan.scenes,
-          framePaths: takeFrames,
-          sourceByCamera,
-        });
-        timings.yoloMs = (timings.yoloMs ?? 0) + (Date.now() - yoloStarted);
-        log.info({ ...jobLog, ...yolo, ms: timings.yoloMs }, 'yolo crop per take');
-      }
-    }
-    if (!skipSubjectCrop && config.ENABLE_SMART_REFRAME) {
+    if (!skipSmartReframe && config.ENABLE_SMART_REFRAME) {
       const trackIndexes = new Set<number>();
       renderPlan.scenes.forEach((scene, index) => {
         if (trackIndexes.size >= 2) return;
@@ -722,7 +692,7 @@ async function processClaimedVideo(
         scenes: lockScenesToLiveSubject(
           renderPlan.scenes,
           (scene) => sourceByCamera.get(scene.position),
-          { containAll: payload.program === 'casa' },
+          { forceReels: payload.program === 'casa' },
         ),
       });
       await setStatus(payload.tenantId, payload.reelId, 'rendering', 58, 'Conferindo cada take');
@@ -757,12 +727,51 @@ async function processClaimedVideo(
         },
         'take judge',
       );
+      if (isYoloConfigured()) {
+        const yoloStarted = Date.now();
+        const takeFrames: Array<{ cameraPosition: number; path: string; sceneIndex: number }> = [];
+        for (let index = 0; index < renderPlan.scenes.length; index += 1) {
+          const scene = renderPlan.scenes[index]!;
+          const framePath = path.join(dir, `crop-take-${index}.jpg`);
+          try {
+            await extractJpegFrameAt(
+              scene.source_recording_path,
+              scene.source_start_offset + Math.max(0.2, scene.duration * 0.4),
+              framePath,
+            );
+            takeFrames.push({
+              cameraPosition: scene.position,
+              path: framePath,
+              sceneIndex: index,
+            });
+          } catch (error) {
+            log.warn(
+              {
+                ...jobLog,
+                take: index,
+                err: error instanceof Error ? error.message : String(error),
+              },
+              'take crop frame skipped',
+            );
+          }
+        }
+        if (takeFrames.length) {
+          const yolo = await applyYoloCrops({
+            scenes: renderPlan.scenes,
+            framePaths: takeFrames,
+            sourceByCamera,
+            reels: payload.program === 'casa',
+          });
+          timings.yoloMs = (timings.yoloMs ?? 0) + (Date.now() - yoloStarted);
+          log.info({ ...jobLog, ...yolo, ms: timings.yoloMs }, 'yolo crop per take');
+        }
+      }
       renderPlan = keepPictureJoins({
         ...renderPlan,
         scenes: lockScenesToLiveSubject(
           renderPlan.scenes,
           (scene) => sourceByCamera.get(scene.position),
-          { containAll: payload.program === 'casa' },
+          { forceReels: payload.program === 'casa' },
         ),
       });
       if (shouldAssignStrategicFx(payload.program, renderPlan.scenes)) {
