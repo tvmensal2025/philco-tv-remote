@@ -93,6 +93,7 @@ export function keepPictureJoins<T extends Pick<ReelPlan, 'program' | 'scenes' |
     scenes: plan.scenes.map((scene, index) => ({
       ...scene,
       transition: index === 0 ? scene.transition : 'dissolve',
+      joinDuration: index === 0 ? scene.joinDuration : undefined,
       punchIn: false,
       motion: scene.motion === 'punch' ? 'none' : scene.motion,
     })),

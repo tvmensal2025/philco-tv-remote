@@ -34,6 +34,9 @@ import {
   takeFilterStatic,
   takeTrimFilter,
   xfadeChain,
+  concatChain,
+  usesHardCutJoins,
+  rewrittenJoin,
   type PackOverlayHit,
 } from './finish.js';
 import { loadFxCatalogFromDisk, resolveFxAssetPath } from './fx-assets.js';
@@ -57,7 +60,7 @@ export type VerticalBrandPass = {
 function ffmpegGlobals() {
   const threads = config.FFMPEG_THREADS;
   if (threads <= 0) return [] as string[];
-  return ['-threads', String(threads), '-filter_threads', String(Math.max(1, threads))];
+  return ['-threads', String(threads), '-filter_threads', '1'];
 }
 
 function resolveMediaBinary(binary: string) {
@@ -450,30 +453,22 @@ async function renderFinished(
   const videoFilters = plan.scenes.map((scene, index) =>
     profile === 'high' ? takeFilter(scene, index) : takeFilterStatic(scene, index),
   );
-  const chain = xfadeChain(
-    plan.scenes.map((scene) => ({
-      duration: scene.duration,
-      transition:
-        profile === 'high'
-          ? scene.transition
-          : scene.transition === 'dissolve'
-            ? 'cut'
-            : scene.transition,
-      joinDuration: scene.joinDuration,
-    })),
-  );
+  const joinProfile = profile === 'high' ? 'high' : 'standard';
+  const joinScenes = plan.scenes.map((scene) => ({
+    duration: scene.duration,
+    transition: rewrittenJoin(scene.transition, joinProfile),
+    joinDuration:
+      rewrittenJoin(scene.transition, joinProfile) === 'cut' ? undefined : scene.joinDuration,
+    joinOverlay: scene.joinOverlay,
+  }));
+  const chain = usesHardCutJoins(plan.scenes, joinProfile)
+    ? concatChain(plan.scenes)
+    : xfadeChain(joinScenes);
   const packHits = collectPackOverlayHits(plan, args, nextInput);
   const packedScenes = new Set(packHits.map((hit) => hit.sceneIndex));
   const overlay = joinOverlayFilter(
-    plan.scenes.map((scene, index) => ({
-      duration: scene.duration,
-      transition:
-        profile === 'high'
-          ? scene.transition
-          : scene.transition === 'dissolve'
-            ? 'cut'
-            : scene.transition,
-      joinDuration: scene.joinDuration,
+    joinScenes.map((scene, index) => ({
+      ...scene,
       joinOverlay: packedScenes.has(index) ? undefined : scene.joinOverlay,
     })),
   );

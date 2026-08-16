@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   JOIN,
+  concatChain,
   joinedDuration,
   joinOverlayFilter,
   joinSpec,
@@ -9,6 +10,7 @@ import {
   packOverlayFilter,
   takeFilter,
   takeFilterStatic,
+  usesHardCutJoins,
   xfadeChain,
 } from '../pipeline/finish.js';
 
@@ -37,6 +39,19 @@ describe('finish graph', () => {
     expect(chain.filter).toContain('transition=fade:duration=0.58');
     expect(chain.filter).toContain('transition=fadeblack');
     expect(chain.output).toBe('xf');
+  });
+
+  it('concats Casa takes on standard so a 0.04s xfade cannot paint the rest black', () => {
+    const scenes = [
+      { duration: 4.2, transition: 'dissolve' },
+      { duration: 4, transition: 'dissolve' },
+      { duration: 3.6, transition: 'dissolve' },
+    ];
+    expect(usesHardCutJoins(scenes, 'standard')).toBe(true);
+    expect(usesHardCutJoins(scenes, 'high')).toBe(false);
+    const chain = concatChain(scenes);
+    expect(chain.filter).toContain('concat=n=3:v=1:a=0');
+    expect(chain.duration).toBeCloseTo(11.8, 5);
   });
 
   it('treats unknown joins as almost-hard cuts, not concat', () => {

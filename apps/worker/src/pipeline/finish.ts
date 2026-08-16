@@ -143,6 +143,36 @@ export function takeFilterStatic(scene: TakeScene, index: number) {
   return `[${index}:v]${takeTrimFilter(scene)},${punch},${grade},fps=30,setsar=1,format=yuv420p${fadeIn}[v${index}]`;
 }
 
+export function rewrittenJoin(transition: string, profile: 'high' | 'standard' | 'safe' = 'high') {
+  if (profile === 'high') return transition;
+  if (transition === 'dissolve') return 'cut';
+  return transition;
+}
+
+export function usesHardCutJoins(
+  scenes: { transition: string }[],
+  profile: 'high' | 'standard' | 'safe' = 'high',
+) {
+  if (scenes.length <= 1) return true;
+  return scenes.slice(1).every((scene) => {
+    const join = rewrittenJoin(scene.transition, profile);
+    return join === 'cut' || join === 'fadein';
+  });
+}
+
+export function concatChain(scenes: { duration: number }[]) {
+  const duration = Number(scenes.reduce((sum, scene) => sum + scene.duration, 0).toFixed(3));
+  if (scenes.length <= 1) {
+    return { filter: '[v0]format=yuv420p[xf]', output: 'xf', duration };
+  }
+  const labels = scenes.map((_, index) => `[v${index}]`).join('');
+  return {
+    filter: `${labels}concat=n=${scenes.length}:v=1:a=0[xf]`,
+    output: 'xf',
+    duration,
+  };
+}
+
 export function xfadeChain(
   scenes: { duration: number; transition: string; joinDuration?: number }[],
 ) {
