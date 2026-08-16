@@ -196,7 +196,7 @@ export const config = z
           : value,
       z.boolean().default(false),
     ),
-    STALE_JOB_MS: z.coerce.number().int().min(60_000).max(3_600_000).default(120_000),
+    STALE_JOB_MS: z.coerce.number().int().min(60_000).max(3_600_000).default(1_200_000),
     WORKER_HEARTBEAT_STALE_MS: z.coerce.number().int().min(30_000).max(600_000).default(90_000),
     MAX_JOB_RECOVERIES: z.coerce.number().int().min(0).max(5).default(2),
     REVIDEO_FORCE_FAIL: z.preprocess(

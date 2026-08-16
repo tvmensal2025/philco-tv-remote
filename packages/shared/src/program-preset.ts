@@ -91,7 +91,7 @@ export function programBrandCopy(input: {
 export const playbookBeatSchema = z.object({
   name: z.string().trim().min(1).max(40),
   roles: z.array(z.enum(cameraRoles)).min(1).max(4),
-  durationSeconds: z.number().min(0.8).max(12),
+  durationSeconds: z.number().min(0.8).max(18),
   reason: z.string().trim().min(1).max(160),
   join: z.enum(joinNames),
   joinDurationSeconds: z.number().min(0.02).max(1.5).optional(),
@@ -503,7 +503,7 @@ export function fitBeatsToMusicBed(
     next = next.map((beat) => ({
       ...beat,
       durationSeconds: Number(
-        Math.min(12, Math.max(0.8, beat.durationSeconds * factor)).toFixed(3),
+        Math.min(18, Math.max(0.8, beat.durationSeconds * factor)).toFixed(3),
       ),
     }));
     const got = joinedPlaybookSeconds(next);
@@ -561,12 +561,12 @@ const pulsoRoles: CameraRole[][] = [
 ];
 
 export const validatedProgramPresets: Record<EditProgram, ProgramPresetSpec> = {
-  casa: spec('casa', 'dissolve', 20, 0.9, 1, [
+  casa: spec('casa', 'dissolve', 59, 0.9, 1, [
     {
       name: 'gancho',
       roles: ['food', 'master', 'ambience', 'side'],
-      durationSeconds: 4.2,
-      reason: 'Imagem forte: a melhor câmera ganha, role é só prior',
+      durationSeconds: 12,
+      reason: 'Palco inteiro: a melhor câmera ganha, role é só prior',
       join: 'dissolve',
       fadeIn: true,
       motion: 'none',
@@ -575,8 +575,8 @@ export const validatedProgramPresets: Record<EditProgram, ProgramPresetSpec> = {
     {
       name: 'servico',
       roles: ['master', 'food'],
-      durationSeconds: 4,
-      reason: 'Continuidade da ação ou do prato',
+      durationSeconds: 12,
+      reason: 'Continuidade da ação no mesmo palco',
       join: 'dissolve',
       motion: 'none',
       preferPeak: true,
@@ -584,28 +584,27 @@ export const validatedProgramPresets: Record<EditProgram, ProgramPresetSpec> = {
     {
       name: 'oficio',
       roles: ['master', 'food', 'side'],
-      durationSeconds: 3.6,
-      reason: 'Ofício na mesma cena, sem forçar sala',
+      durationSeconds: 12,
+      reason: 'Mesma cena, sem close nem fade a preto',
       join: 'dissolve',
       motion: 'none',
       preferPeak: true,
     },
     {
-      name: 'insert',
+      name: 'verso',
       roles: ['food', 'master'],
-      durationSeconds: 3.2,
-      reason: 'Close só se a câmera for realmente melhor',
-      join: 'fadeblack',
-      punchIn: true,
-      motion: 'punch',
+      durationSeconds: 12,
+      reason: 'Segundo take longo; crop só se esta caixa estiver em pé agora',
+      join: 'dissolve',
+      motion: 'none',
       preferPeak: true,
     },
     {
       name: 'saida',
       roles: ['master', 'food', 'ambience'],
-      durationSeconds: 5.4,
-      reason: 'Saída na câmera que conta a história',
-      join: 'fadeblack',
+      durationSeconds: 12,
+      reason: 'Saída na câmera que conta a história, ainda em dissolve',
+      join: 'dissolve',
       fadeOut: true,
       motion: 'none',
       preferPeak: true,

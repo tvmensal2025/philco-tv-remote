@@ -4,6 +4,7 @@ import {
   deliveryAudioEncodeArgs,
   deliveryAudioFilter,
   duckingFilter,
+  liveStageBed,
   mixBackgroundMusicGraph,
   mixVoiceoverGraph,
 } from './audio.js';
@@ -91,6 +92,20 @@ describe('audio architecture', () => {
       musicStart: 0.84,
     });
     expect(graph).toContain('[5:a]atrim=start=0.84:duration=30');
+    expect(graph.indexOf('loudnorm=I=-14')).toBeLessThan(graph.indexOf('afade=t=out'));
+  });
+
+  it('keeps live-stage voice louder than the music bed', () => {
+    const graph = mixBackgroundMusicGraph({
+      musicInputIndex: 5,
+      ambientInputIndex: 0,
+      ambientStart: 2,
+      duration: 59,
+      ducking: liveStageBed,
+    });
+    expect(graph).toContain('volume=0.22');
+    expect(graph).toContain('volume=0.88');
+    expect(liveStageBed.ambientGain).toBeGreaterThan(liveStageBed.musicGain);
     expect(graph.indexOf('loudnorm=I=-14')).toBeLessThan(graph.indexOf('afade=t=out'));
   });
 });

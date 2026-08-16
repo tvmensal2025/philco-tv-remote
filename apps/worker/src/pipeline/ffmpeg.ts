@@ -12,6 +12,7 @@ import {
   mixBackgroundMusicGraph,
   mixVoiceoverGraph,
   loudnormThenFade,
+  liveStageBed,
 } from './audio.js';
 import { pickMusicBed } from './music-bed.js';
 import { ffmpegSubtitlesFilter } from './captions.js';
@@ -20,6 +21,7 @@ import {
   parseSceneCuts,
   parseSilences,
   selectPeaks,
+  midrollBlackHits,
   type PeakWindow,
 } from './ffmpeg-scan.js';
 import {
@@ -37,6 +39,7 @@ import {
   concatChain,
   usesHardCutJoins,
   rewrittenJoin,
+  joinProfileFor,
   type PackOverlayHit,
 } from './finish.js';
 import { loadFxCatalogFromDisk, resolveFxAssetPath } from './fx-assets.js';
@@ -446,6 +449,7 @@ async function renderFinished(
         musicInputIndex,
         voiceInputIndex,
       },
+      profile,
     );
     return;
   }
@@ -453,7 +457,7 @@ async function renderFinished(
   const videoFilters = plan.scenes.map((scene, index) =>
     profile === 'high' ? takeFilter(scene, index) : takeFilterStatic(scene, index),
   );
-  const joinProfile = profile === 'high' ? 'high' : 'standard';
+  const joinProfile = joinProfileFor(plan.program, profile);
   const joinScenes = plan.scenes.map((scene) => ({
     duration: scene.duration,
     transition: rewrittenJoin(scene.transition, joinProfile),
@@ -484,12 +488,22 @@ async function renderFinished(
   filters.push(
     masterFinish(chain.duration, fadeOut, profile === 'high' ? 'high' : 'standard', videoOut),
   );
-  await mapAndEncode(plan, args, filters, '[basev]', output, captionsPath, chain.duration, {
-    logoInputIndex,
-    endCard: Boolean(brand?.endCard),
-    musicInputIndex,
-    voiceInputIndex,
-  });
+  await mapAndEncode(
+    plan,
+    args,
+    filters,
+    '[basev]',
+    output,
+    captionsPath,
+    chain.duration,
+    {
+      logoInputIndex,
+      endCard: Boolean(brand?.endCard),
+      musicInputIndex,
+      voiceInputIndex,
+    },
+    profile,
+  );
 }
 
 async function mapAndEncode(
@@ -506,6 +520,7 @@ async function mapAndEncode(
     musicInputIndex?: number;
     voiceInputIndex?: number;
   },
+  profile: RenderProfile = 'standard',
 ) {
   const graph = [...filters];
   let map = videoMap;
@@ -531,6 +546,7 @@ async function mapAndEncode(
   const ambientIndex = plan.audio && !speedWarped ? (audioIndex >= 0 ? audioIndex : 0) : undefined;
   const hasVoice = typeof brand?.voiceInputIndex === 'number';
   const hasMusic = typeof brand?.musicInputIndex === 'number';
+  const liveStage = plan.program === 'casa' && ambientIndex != null;
   if (hasMusic) {
     graph.push(
       mixBackgroundMusicGraph({
@@ -540,6 +556,7 @@ async function mapAndEncode(
         ambientStart: plan.audio?.source_start_offset,
         musicStart: plan.music?.startSeconds,
         voiceInputIndex: hasVoice ? brand!.voiceInputIndex : undefined,
+        ducking: liveStage ? liveStageBed : undefined,
       }),
     );
   } else if (hasVoice) {
@@ -560,13 +577,14 @@ async function mapAndEncode(
   args.push('-filter_complex', graph.join(';'), '-map', map);
   if (hasMusic || hasVoice || plan.audio) args.push('-map', '[outa]', ...deliveryAudioEncodeArgs());
   else args.push('-an');
+  const delivery = profile !== 'safe';
   args.push(
     '-c:v',
     'libx264',
     '-preset',
-    config.FFMPEG_PRESET,
+    delivery ? 'medium' : 'veryfast',
     '-crf',
-    '20',
+    delivery ? '18' : '20',
     '-pix_fmt',
     'yuv420p',
     '-t',
@@ -575,7 +593,30 @@ async function mapAndEncode(
     '+faststart',
     output,
   );
-  await run('ffmpeg', args);
+  await run('ffmpeg', args, 20 * 60 * 1000);
+}
+
+/** Fail ready when picture dies in the middle. Opening/closing fades are allowed. */
+export async function assertPictureThroughout(input: string, duration: number) {
+  const log = await runAllowFail(
+    'ffmpeg',
+    [
+      '-hide_banner',
+      '-i',
+      input,
+      '-vf',
+      'blackdetect=d=0.35:pix_th=0.12',
+      '-an',
+      '-f',
+      'null',
+      '-',
+    ],
+    3 * 60 * 1000,
+  );
+  const mid = midrollBlackHits(log, duration);
+  if (mid.length) {
+    throw new Error(`PICTURE_DEAD:${mid[0]!.start}-${mid[0]!.end}`);
+  }
 }
 
 function collectPackOverlayHits(

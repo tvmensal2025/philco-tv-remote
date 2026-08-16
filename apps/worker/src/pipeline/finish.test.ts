@@ -11,6 +11,7 @@ import {
   takeFilter,
   takeFilterStatic,
   usesHardCutJoins,
+  joinProfileFor,
   xfadeChain,
 } from '../pipeline/finish.js';
 
@@ -41,7 +42,7 @@ describe('finish graph', () => {
     expect(chain.output).toBe('xf');
   });
 
-  it('concats Casa takes on standard so a 0.04s xfade cannot paint the rest black', () => {
+  it('concats dissolves on standard so a 0.04s xfade cannot paint the rest black', () => {
     const scenes = [
       { duration: 4.2, transition: 'dissolve' },
       { duration: 4, transition: 'dissolve' },
@@ -52,6 +53,21 @@ describe('finish graph', () => {
     const chain = concatChain(scenes);
     expect(chain.filter).toContain('concat=n=3:v=1:a=0');
     expect(chain.duration).toBeCloseTo(11.8, 5);
+  });
+
+  it('keeps Casa dissolves on a high join profile even when encode is standard', () => {
+    expect(joinProfileFor('casa', 'standard')).toBe('high');
+    expect(joinProfileFor('casa', 'safe')).toBe('safe');
+    expect(joinProfileFor('oficio', 'standard')).toBe('standard');
+    expect(
+      usesHardCutJoins(
+        [
+          { duration: 12, transition: 'dissolve' },
+          { duration: 12, transition: 'dissolve' },
+        ],
+        'high',
+      ),
+    ).toBe(false);
   });
 
   it('treats unknown joins as almost-hard cuts, not concat', () => {

@@ -208,40 +208,44 @@ type CropLockScene = {
   cropFilter?: string;
 };
 
-/** One live subject per camera. Dead YOLO boxes (feet, edge, short) do not replace a good take. */
+function keepStandingTakeCrop<T extends CropLockScene>(scene: T, frame: FrameSize): T | null {
+  if (!isStandingDeliveryCrop(scene.crop, frame) || !scene.crop) return null;
+  const crop = scene.crop as [number, number, number, number];
+  const cropMode: 'crop' | 'pad_blur' =
+    scene.cropMode === 'pad_blur' || cropNeedsPadBlur({ crop }) ? 'pad_blur' : 'crop';
+  return {
+    ...scene,
+    crop,
+    cropMode,
+    cropTight: cropMode === 'pad_blur' ? true : Boolean(scene.cropTight),
+    cropFilter: undefined,
+  };
+}
+
+function containTake<T extends CropLockScene>(scene: T, frame: FrameSize): T {
+  const fitted = containFullFrame(frame);
+  return {
+    ...scene,
+    crop: fitted.bbox,
+    cropMode: fitted.mode,
+    cropTight: true,
+    cropFilter: undefined,
+  };
+}
+
+/**
+ * Never copy a crop across time: the singer moves. Casa 1-cam uses the whole
+ * stage (contain). Other programs may keep a 9:16 close only if THIS take is standing.
+ */
 export function lockScenesToLiveSubject<T extends CropLockScene>(
   scenes: T[],
   frameOf: (scene: T) => FrameSize | undefined,
+  opts?: { containAll?: boolean },
 ): T[] {
-  const locked = new Map<
-    string,
-    { crop: [number, number, number, number]; cropMode: 'crop' | 'pad_blur'; cropTight: boolean }
-  >();
-  for (const scene of scenes) {
-    const frame = frameOf(scene) ?? { width: 1280, height: 720 };
-    if (!isStandingDeliveryCrop(scene.crop, frame) || !scene.crop) continue;
-    if (locked.has(scene.camera_id)) continue;
-    const crop = scene.crop as [number, number, number, number];
-    const cropMode: 'crop' | 'pad_blur' =
-      scene.cropMode === 'pad_blur' || cropNeedsPadBlur({ crop }) ? 'pad_blur' : 'crop';
-    locked.set(scene.camera_id, {
-      crop,
-      cropMode,
-      cropTight: cropMode === 'pad_blur' ? true : Boolean(scene.cropTight),
-    });
-  }
   return scenes.map((scene) => {
     const frame = frameOf(scene) ?? { width: 1280, height: 720 };
-    const keep = locked.get(scene.camera_id);
-    if (keep) return { ...scene, ...keep, cropFilter: undefined };
-    const fitted = containFullFrame(frame);
-    return {
-      ...scene,
-      crop: fitted.bbox,
-      cropMode: fitted.mode,
-      cropTight: true,
-      cropFilter: undefined,
-    };
+    if (opts?.containAll) return containTake(scene, frame);
+    return keepStandingTakeCrop(scene, frame) ?? containTake(scene, frame);
   });
 }
 

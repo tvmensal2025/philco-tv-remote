@@ -124,7 +124,7 @@ describe('lockScenesToLiveSubject', () => {
     expect(isStandingDeliveryCrop([496, 294, 412, 426], frame)).toBe(false);
   });
 
-  it('copies the first standing crop onto later dead takes of the same camera', () => {
+  it('keeps a standing crop only on that take and contains later dead boxes', () => {
     const locked = lockScenesToLiveSubject(
       [
         {
@@ -141,20 +141,36 @@ describe('lockScenesToLiveSubject', () => {
         },
         {
           camera_id: 'c1',
-          crop: [710, 32, 570, 688],
-          cropMode: 'pad_blur' as const,
-          cropTight: true,
+          crop: [560, 0, 406, 720],
+          cropMode: 'crop' as const,
         },
       ],
       () => frame,
     );
-    expect(locked.map((scene) => scene.crop)).toEqual([
-      [204, 0, 406, 720],
-      [204, 0, 406, 720],
-      [204, 0, 406, 720],
-    ]);
-    expect(locked.every((scene) => scene.cropMode === 'crop')).toBe(true);
+    const fallback = containFullFrame(frame);
+    expect(locked[0]?.crop).toEqual([204, 0, 406, 720]);
+    expect(locked[0]?.cropMode).toBe('crop');
+    expect(locked[1]?.crop).toEqual(fallback.bbox);
+    expect(locked[1]?.cropMode).toBe(fallback.mode);
+    expect(locked[2]?.crop).toEqual([560, 0, 406, 720]);
     expect(locked.every((scene) => scene.cropFilter === undefined)).toBe(true);
+  });
+
+  it('contains every Casa take even when a standing 9:16 exists', () => {
+    const locked = lockScenesToLiveSubject(
+      [
+        {
+          camera_id: 'c1',
+          crop: [204, 0, 406, 720],
+          cropMode: 'crop' as const,
+        },
+      ],
+      () => frame,
+      { containAll: true },
+    );
+    const fallback = containFullFrame(frame);
+    expect(locked[0]?.crop).toEqual(fallback.bbox);
+    expect(locked[0]?.cropMode).toBe(fallback.mode);
   });
 
   it('falls back to full-frame contain when no standing crop exists', () => {

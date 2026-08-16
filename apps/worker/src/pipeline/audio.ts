@@ -44,9 +44,15 @@ export function deliveryAudioEncodeArgs() {
   return ['-c:a', 'aac', '-ar', '48000', '-ac', '2', '-b:a', '192k'] as const;
 }
 
+export const liveStageBed: DuckingConfig = {
+  ...defaultDucking,
+  musicGain: 0.22,
+  ambientGain: 0.88,
+};
+
 /** Fade after loudnorm. Fade-then-loudnorm restores the tail and cuts dry. */
 export function loudnormThenFade(input: { duration: number; loudnormI: number }) {
-  const fade = Math.min(1.8, Math.max(1.0, Number((input.duration * 0.1).toFixed(3))));
+  const fade = Math.min(2.2, Math.max(1.8, Number((input.duration * 0.1).toFixed(3))));
   const start = Math.max(0, Number((input.duration - fade).toFixed(3)));
   return `loudnorm=I=${input.loudnormI}:TP=-1.5:LRA=11,afade=t=in:st=0:d=0.35,afade=t=out:st=${start}:d=${fade}`;
 }

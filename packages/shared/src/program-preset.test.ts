@@ -38,7 +38,12 @@ describe('validated four-program standard', () => {
       expect(joinedPlaybookSeconds(short.beats)).toBeLessThan(18);
       expect(joinedPlaybookSeconds(long.beats)).toBeGreaterThan(56);
       expect(joinedPlaybookSeconds(long.beats)).toBeLessThan(64);
-      expect(playbookFor(program).targetDuration).toBeLessThan(40);
+      if (program === 'casa') {
+        expect(playbookFor(program).targetDuration).toBeGreaterThanOrEqual(45);
+        expect(playbookFor(program).targetDuration).toBeLessThanOrEqual(62);
+      } else {
+        expect(playbookFor(program).targetDuration).toBeLessThan(40);
+      }
     }
   });
 
@@ -47,7 +52,12 @@ describe('validated four-program standard', () => {
     expect(casa.beats[0]?.roles).toEqual(['food', 'master', 'ambience', 'side']);
     expect(casa.join).toBe('dissolve');
     expect(casa.beats[0]?.motion).toBe('none');
-    expect(casa.beats.some((beat) => beat.roles.includes('food') && beat.punchIn)).toBe(true);
+    expect(casa.beats.every((beat) => beat.join === 'dissolve')).toBe(true);
+    expect(casa.beats.every((beat) => !beat.punchIn && beat.motion !== 'punch')).toBe(true);
+    expect(casa.beats.some((beat) => beat.join === 'fadeblack')).toBe(false);
+    expect(
+      casa.beats.every((beat) => beat.durationSeconds >= 10 && beat.durationSeconds <= 12),
+    ).toBe(true);
   });
 
   it('rejects invented transitions and empty timelines', () => {

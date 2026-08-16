@@ -53,7 +53,8 @@ describe('program timeline editor', () => {
     const casa = cloneValidatedSpec('casa');
     expect(beatScale(casa.beats[0]!, 0)).toBe(1);
     expect(beatScale(casa.beats[0]!, casa.beats[0]!.durationSeconds)).toBe(1);
-    const insert = casa.beats.find((beat) => beat.motion === 'punch');
+    const assinatura = cloneValidatedSpec('assinatura');
+    const insert = assinatura.beats.find((beat) => beat.motion === 'punch');
     expect(insert).toBeTruthy();
     expect(beatScale(insert!, insert!.durationSeconds)).toBeCloseTo(1.11);
     const start = previewAtTime(casa, 0);

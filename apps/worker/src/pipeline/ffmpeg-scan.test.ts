@@ -3,6 +3,7 @@ import {
   parseSceneCuts,
   parseSilences,
   selectPeaks,
+  midrollBlackHits,
   type PeakWindow,
 } from './ffmpeg-scan.js';
 import { describe, expect, it } from 'vitest';
@@ -45,5 +46,15 @@ describe('ffmpeg-scan', () => {
     expect(peaks.length).toBeGreaterThan(0);
     expect(peaks.length).toBeLessThanOrEqual(2);
     expect(peaks[0].fusedScore).toBeGreaterThanOrEqual(peaks.at(-1)?.fusedScore ?? 0);
+  });
+
+  it('treats mid-roll black as a fail and ignores open/close fades', () => {
+    const log = `
+[blackdetect @ 0] black_start:0 black_end:0.7
+[blackdetect @ 0] black_start:4.2 black_end:19.8
+[blackdetect @ 0] black_start:19.1 black_end:20.4
+`;
+    expect(midrollBlackHits(log, 20.4)).toEqual([{ start: 4.2, end: 19.8 }]);
+    expect(midrollBlackHits('[blackdetect @ 0] black_start:19.2 black_end:20.4', 20.4)).toEqual([]);
   });
 });

@@ -149,6 +149,16 @@ export function rewrittenJoin(transition: string, profile: 'high' | 'standard' |
   return transition;
 }
 
+/** Casa keeps dissolve xfade even when the encode profile is standard (static takes). */
+export function joinProfileFor(
+  program: string | undefined,
+  encodeProfile: 'high' | 'standard' | 'safe',
+): 'high' | 'standard' | 'safe' {
+  if (encodeProfile === 'safe') return 'safe';
+  if (program === 'casa') return 'high';
+  return encodeProfile;
+}
+
 export function usesHardCutJoins(
   scenes: { transition: string }[],
   profile: 'high' | 'standard' | 'safe' = 'high',

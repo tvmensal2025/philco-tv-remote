@@ -96,7 +96,7 @@ const video = new Worker(
   {
     connection: redis.duplicate(),
     concurrency: videoConcurrency,
-    lockDuration: 15 * 60 * 1000,
+    lockDuration: 25 * 60 * 1000,
     stalledInterval: 30_000,
     maxStalledCount: 2,
   },

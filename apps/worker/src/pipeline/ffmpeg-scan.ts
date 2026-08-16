@@ -158,3 +158,21 @@ export function selectPeaks(input: {
     .sort((a, b) => b.fusedScore - a.fusedScore)
     .slice(0, input.maxPeaks ?? 2);
 }
+
+export function midrollBlackHits(
+  log: string,
+  duration: number,
+): Array<{ start: number; end: number }> {
+  const hits = [...log.matchAll(/black_start:\s*([\d.]+)\s+black_end:\s*([\d.]+)/g)].map(
+    (match) => ({
+      start: Number(match[1]),
+      end: Number(match[2]),
+    }),
+  );
+  const midStart = 1.05;
+  const midEnd = Math.max(midStart, duration - 1.2);
+  return hits.filter((hit) => {
+    const overlap = Math.min(hit.end, midEnd) - Math.max(hit.start, midStart);
+    return overlap >= 0.35;
+  });
+}

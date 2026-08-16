@@ -72,6 +72,7 @@ import {
   extractJpegFrames,
   makeThumbnail,
   scanSegment,
+  assertPictureThroughout,
 } from './ffmpeg.js';
 import { probeMedia } from './probe-media.js';
 import { renderComposition } from './composition.js';
@@ -386,7 +387,8 @@ async function processClaimedVideo(
       }
     }
 
-    if (isYoloConfigured() && framePaths.length) {
+    const skipSubjectCrop = payload.program === 'casa';
+    if (!skipSubjectCrop && isYoloConfigured() && framePaths.length) {
       await setStatus(
         payload.tenantId,
         payload.reelId,
@@ -515,7 +517,7 @@ async function processClaimedVideo(
       ...renderPlan,
       scenes: applyCutSafety(renderPlan.scenes, peaksByCamera, windowByCamera),
     };
-    if (isYoloConfigured()) {
+    if (!skipSubjectCrop && isYoloConfigured()) {
       const yoloStarted = Date.now();
       const takeFrames: Array<{ cameraPosition: number; path: string; sceneIndex: number }> = [];
       for (let index = 0; index < renderPlan.scenes.length; index += 1) {
@@ -545,7 +547,7 @@ async function processClaimedVideo(
         log.info({ ...jobLog, ...yolo, ms: timings.yoloMs }, 'yolo crop per take');
       }
     }
-    if (config.ENABLE_SMART_REFRAME) {
+    if (!skipSubjectCrop && config.ENABLE_SMART_REFRAME) {
       const trackIndexes = new Set<number>();
       renderPlan.scenes.forEach((scene, index) => {
         if (trackIndexes.size >= 2) return;
@@ -639,8 +641,10 @@ async function processClaimedVideo(
     if (!renderFromProject) {
       renderPlan = keepPictureJoins({
         ...renderPlan,
-        scenes: lockScenesToLiveSubject(renderPlan.scenes, (scene) =>
-          sourceByCamera.get(scene.position),
+        scenes: lockScenesToLiveSubject(
+          renderPlan.scenes,
+          (scene) => sourceByCamera.get(scene.position),
+          { containAll: payload.program === 'casa' },
         ),
       });
     }
@@ -794,6 +798,7 @@ async function processClaimedVideo(
 
     await setStatus(payload.tenantId, payload.reelId, 'rendering', 82, 'Verificando qualidade');
     const probe = await probeMedia(output);
+    await assertPictureThroughout(output, probe.durationSeconds ?? renderPlan.duration);
     const technical = evaluateTechnicalQuality(probe, {
       videoCodec: 'h264',
       pixFmt: 'yuv420p',
