@@ -569,6 +569,8 @@ async function mapAndEncode(
     '20',
     '-pix_fmt',
     'yuv420p',
+    '-t',
+    String(Number(duration.toFixed(3))),
     '-movflags',
     '+faststart',
     output,
