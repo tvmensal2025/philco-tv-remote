@@ -23,7 +23,12 @@ export const takeVerdictSchema = z.object({
     .enum(['none', 'black', 'wrong_scene', 'no_subject', 'watermark', 'unusable'])
     .optional(),
   customersOnly: z.boolean().optional(),
-  usableUntil: z.number().min(0.18).max(1).optional(),
+  usableUntil: z.preprocess((value) => {
+    if (value == null || value === '') return undefined;
+    const n = Number(value);
+    if (!Number.isFinite(n)) return undefined;
+    return Math.min(1, Math.max(0.18, n));
+  }, z.number().min(0.18).max(1).optional()),
   reason: z.string().trim().min(1).max(160),
 });
 export type TakeVerdict = z.infer<typeof takeVerdictSchema>;

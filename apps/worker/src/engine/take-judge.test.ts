@@ -328,6 +328,7 @@ it('trims a kept Casa take to the usable stage window instead of padding 12s', (
   expect(trimKeptDuration(12, 1, 'casa')).toBe(12);
   expect(trimKeptDuration(12, 0.5, 'casa')).toBe(6);
   expect(trimKeptDuration(12, 1, 'oficio')).toBe(12);
+  expect(takeVerdictSchema.parse({ ...diningRoom, usableUntil: 0 }).usableUntil).toBe(0.18);
 });
 
 it('keeps the hook shorter than a dining tail when the VLM marks usableUntil', async () => {
