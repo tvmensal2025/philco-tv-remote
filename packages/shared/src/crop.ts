@@ -177,6 +177,74 @@ export function containSubjectCrop(input: {
   };
 }
 
+/** Full-height (or nearly) 9:16 window that still contains a standing person. */
+export function isStandingDeliveryCrop(
+  bbox: number[] | null | undefined,
+  frame: FrameSize,
+): boolean {
+  if (!isDeliverySourceCrop(bbox) || !bbox) return false;
+  const [x, y, w, h] = bbox.map(Number);
+  if (h < frame.height * 0.72) return false;
+  if (y > frame.height * 0.16) return false;
+  if (x < 0 || y < 0) return false;
+  if (x + w > frame.width + 2 || y + h > frame.height + 2) return false;
+  return true;
+}
+
+export function containFullFrame(frame: FrameSize): SubjectCrop {
+  return containSubjectCrop({
+    frameWidth: frame.width,
+    frameHeight: frame.height,
+    subject: { x: 0, y: 0, w: frame.width, h: frame.height },
+  });
+}
+
+type CropLockScene = {
+  camera_id: string;
+  position?: number;
+  crop?: number[];
+  cropMode?: 'crop' | 'pad_blur';
+  cropTight?: boolean;
+  cropFilter?: string;
+};
+
+/** One live subject per camera. Dead YOLO boxes (feet, edge, short) do not replace a good take. */
+export function lockScenesToLiveSubject<T extends CropLockScene>(
+  scenes: T[],
+  frameOf: (scene: T) => FrameSize | undefined,
+): T[] {
+  const locked = new Map<
+    string,
+    { crop: [number, number, number, number]; cropMode: 'crop' | 'pad_blur'; cropTight: boolean }
+  >();
+  for (const scene of scenes) {
+    const frame = frameOf(scene) ?? { width: 1280, height: 720 };
+    if (!isStandingDeliveryCrop(scene.crop, frame) || !scene.crop) continue;
+    if (locked.has(scene.camera_id)) continue;
+    const crop = scene.crop as [number, number, number, number];
+    const cropMode: 'crop' | 'pad_blur' =
+      scene.cropMode === 'pad_blur' || cropNeedsPadBlur({ crop }) ? 'pad_blur' : 'crop';
+    locked.set(scene.camera_id, {
+      crop,
+      cropMode,
+      cropTight: cropMode === 'pad_blur' ? true : Boolean(scene.cropTight),
+    });
+  }
+  return scenes.map((scene) => {
+    const frame = frameOf(scene) ?? { width: 1280, height: 720 };
+    const keep = locked.get(scene.camera_id);
+    if (keep) return { ...scene, ...keep, cropFilter: undefined };
+    const fitted = containFullFrame(frame);
+    return {
+      ...scene,
+      crop: fitted.bbox,
+      cropMode: fitted.mode,
+      cropTight: true,
+      cropFilter: undefined,
+    };
+  });
+}
+
 export function pickStandingSubject(
   people: Array<{ bbox: [number, number, number, number]; is_full_body?: boolean }>,
 ): Box | null {

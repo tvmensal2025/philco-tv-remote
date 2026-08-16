@@ -1,8 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import {
+  containFullFrame,
   containSubjectCrop,
   cropNeedsPadBlur,
   isDeliverySourceCrop,
+  isStandingDeliveryCrop,
+  lockScenesToLiveSubject,
   mapBoxToFrame,
   pickStandingSubject,
 } from './crop.js';
@@ -110,5 +113,57 @@ describe('isDeliverySourceCrop', () => {
     expect(isDeliverySourceCrop([400, 0, 405, 720])).toBe(true);
     expect(isDeliverySourceCrop([77, 0, 446, 720])).toBe(true);
     expect(isDeliverySourceCrop([690, 0, 608, 1080])).toBe(true);
+  });
+});
+
+describe('lockScenesToLiveSubject', () => {
+  const frame = { width: 1280, height: 720 };
+
+  it('keeps a standing 9:16 and rejects a feet box', () => {
+    expect(isStandingDeliveryCrop([204, 0, 406, 720], frame)).toBe(true);
+    expect(isStandingDeliveryCrop([496, 294, 412, 426], frame)).toBe(false);
+  });
+
+  it('copies the first standing crop onto later dead takes of the same camera', () => {
+    const locked = lockScenesToLiveSubject(
+      [
+        {
+          camera_id: 'c1',
+          crop: [204, 0, 406, 720],
+          cropMode: 'crop' as const,
+          cropFilter: 'crop=60:270:0:0',
+        },
+        {
+          camera_id: 'c1',
+          crop: [496, 294, 412, 426],
+          cropMode: 'pad_blur' as const,
+          cropTight: true,
+        },
+        {
+          camera_id: 'c1',
+          crop: [710, 32, 570, 688],
+          cropMode: 'pad_blur' as const,
+          cropTight: true,
+        },
+      ],
+      () => frame,
+    );
+    expect(locked.map((scene) => scene.crop)).toEqual([
+      [204, 0, 406, 720],
+      [204, 0, 406, 720],
+      [204, 0, 406, 720],
+    ]);
+    expect(locked.every((scene) => scene.cropMode === 'crop')).toBe(true);
+    expect(locked.every((scene) => scene.cropFilter === undefined)).toBe(true);
+  });
+
+  it('falls back to full-frame contain when no standing crop exists', () => {
+    const locked = lockScenesToLiveSubject(
+      [{ camera_id: 'c1', crop: [496, 294, 412, 426], cropMode: 'pad_blur' as const }],
+      () => frame,
+    );
+    const fallback = containFullFrame(frame);
+    expect(locked[0]?.cropMode).toBe(fallback.mode);
+    expect(locked[0]?.crop).toEqual(fallback.bbox);
   });
 });

@@ -44,6 +44,13 @@ export function deliveryAudioEncodeArgs() {
   return ['-c:a', 'aac', '-ar', '48000', '-ac', '2', '-b:a', '192k'] as const;
 }
 
+/** Fade after loudnorm. Fade-then-loudnorm restores the tail and cuts dry. */
+export function loudnormThenFade(input: { duration: number; loudnormI: number }) {
+  const fade = Math.min(1.8, Math.max(1.0, Number((input.duration * 0.1).toFixed(3))));
+  const start = Math.max(0, Number((input.duration - fade).toFixed(3)));
+  return `loudnorm=I=${input.loudnormI}:TP=-1.5:LRA=11,afade=t=in:st=0:d=0.35,afade=t=out:st=${start}:d=${fade}`;
+}
+
 export function mixVoiceoverGraph(input: {
   ambientInputIndex?: number;
   ambientStart?: number;
@@ -52,14 +59,13 @@ export function mixVoiceoverGraph(input: {
   ducking?: DuckingConfig;
 }) {
   const config = input.ducking ?? defaultDucking;
-  const fadeOutStart = Math.max(0, input.duration - 0.8);
   const voice = `[${input.voiceInputIndex}:a]${deliveryAudioFilter()},volume=${config.voiceGain},apad=whole_dur=${input.duration}[vsrc]`;
   if (input.ambientInputIndex == null) {
-    return `${voice};[vsrc]afade=t=in:st=0:d=0.3,afade=t=out:st=${fadeOutStart}:d=0.8,loudnorm=I=-16:TP=-1.5:LRA=11[outa]`;
+    return `${voice};[vsrc]${loudnormThenFade({ duration: input.duration, loudnormI: -16 })}[outa]`;
   }
   const start = input.ambientStart ?? 0;
-  const ambient = `[${input.ambientInputIndex}:a]atrim=start=${start}:duration=${input.duration},asetpts=PTS-STARTPTS,afade=t=in:st=0:d=0.55,afade=t=out:st=${fadeOutStart}:d=0.8,${deliveryAudioFilter()},volume=${config.ambientGain}[ambient]`;
-  const duck = `[vsrc]asplit=2[vduck][vmix];[ambient][vduck]sidechaincompress=threshold=${config.threshold}dB:ratio=${config.ratio}:attack=${config.attack}:release=${config.release}[ducked];[ducked][vmix]amix=inputs=2:duration=first:dropout_transition=2,loudnorm=I=-16:TP=-1.5:LRA=11[outa]`;
+  const ambient = `[${input.ambientInputIndex}:a]atrim=start=${start}:duration=${input.duration},asetpts=PTS-STARTPTS,${deliveryAudioFilter()},volume=${config.ambientGain}[ambient]`;
+  const duck = `[vsrc]asplit=2[vduck][vmix];[ambient][vduck]sidechaincompress=threshold=${config.threshold}dB:ratio=${config.ratio}:attack=${config.attack}:release=${config.release}[ducked];[ducked][vmix]amix=inputs=2:duration=first:dropout_transition=2,${loudnormThenFade({ duration: input.duration, loudnormI: -16 })}[outa]`;
   return `${ambient};${voice};${duck}`;
 }
 
@@ -73,9 +79,8 @@ export function mixBackgroundMusicGraph(input: {
   ducking?: DuckingConfig;
 }) {
   const config = input.ducking ?? backgroundBed;
-  const fadeOutStart = Math.max(0, input.duration - 1.2);
   const musicStart = Math.max(0, input.musicStart ?? 0);
-  const music = `[${input.musicInputIndex}:a]atrim=start=${musicStart}:duration=${input.duration},asetpts=PTS-STARTPTS,afade=t=in:st=0:d=0.4,afade=t=out:st=${fadeOutStart}:d=1.2,${deliveryAudioFilter()},volume=${config.musicGain},apad=whole_dur=${input.duration}[music]`;
+  const music = `[${input.musicInputIndex}:a]atrim=start=${musicStart}:duration=${input.duration},asetpts=PTS-STARTPTS,${deliveryAudioFilter()},volume=${config.musicGain},apad=whole_dur=${input.duration}[music]`;
   const voice =
     input.voiceInputIndex == null
       ? null
@@ -83,19 +88,20 @@ export function mixBackgroundMusicGraph(input: {
   const ambient =
     input.ambientInputIndex == null
       ? null
-      : `[${input.ambientInputIndex}:a]atrim=start=${input.ambientStart ?? 0}:duration=${input.duration},asetpts=PTS-STARTPTS,afade=t=in:st=0:d=0.4,afade=t=out:st=${fadeOutStart}:d=1.2,${deliveryAudioFilter()},volume=${config.ambientGain}[ambient]`;
+      : `[${input.ambientInputIndex}:a]atrim=start=${input.ambientStart ?? 0}:duration=${input.duration},asetpts=PTS-STARTPTS,${deliveryAudioFilter()},volume=${config.ambientGain}[ambient]`;
+  const tail = loudnormThenFade({ duration: input.duration, loudnormI: -14 });
 
   if (voice) {
     const duckMusic = `[music][vduck]sidechaincompress=threshold=${config.threshold}dB:ratio=${config.ratio}:attack=${config.attack}:release=${config.release}[ducked]`;
     if (ambient) {
-      return `${music};${ambient};${voice};[vsrc]asplit=2[vduck][vmix];${duckMusic};[ducked][ambient][vmix]amix=inputs=3:duration=first:dropout_transition=2,loudnorm=I=-14:TP=-1.5:LRA=11[outa]`;
+      return `${music};${ambient};${voice};[vsrc]asplit=2[vduck][vmix];${duckMusic};[ducked][ambient][vmix]amix=inputs=3:duration=first:dropout_transition=2,${tail}[outa]`;
     }
-    return `${music};${voice};[vsrc]asplit=2[vduck][vmix];${duckMusic};[ducked][vmix]amix=inputs=2:duration=first:dropout_transition=2,loudnorm=I=-14:TP=-1.5:LRA=11[outa]`;
+    return `${music};${voice};[vsrc]asplit=2[vduck][vmix];${duckMusic};[ducked][vmix]amix=inputs=2:duration=first:dropout_transition=2,${tail}[outa]`;
   }
   if (ambient) {
-    return `${music};${ambient};[music][ambient]amix=inputs=2:duration=first:dropout_transition=2,loudnorm=I=-14:TP=-1.5:LRA=11[outa]`;
+    return `${music};${ambient};[music][ambient]amix=inputs=2:duration=first:dropout_transition=2,${tail}[outa]`;
   }
-  return `${music};[music]loudnorm=I=-14:TP=-1.5:LRA=11[outa]`;
+  return `${music};[music]${tail}[outa]`;
 }
 
 export type LicensedMusicAsset = {

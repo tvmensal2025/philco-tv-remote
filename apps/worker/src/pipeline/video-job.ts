@@ -19,6 +19,7 @@ import {
   parseVideoProject,
   compileVideoProject,
   projectFromDecision,
+  lockScenesToLiveSubject,
   type VideoJob,
 } from '@reelops/shared';
 import type { Job } from 'bullmq';
@@ -98,7 +99,7 @@ import {
 import { config } from '../config.js';
 import { db, log } from '../services.js';
 import { workerId } from '../worker-id.js';
-import { houseCutFromPlan, ReelPlanner } from '../engine/planner.js';
+import { houseCutFromPlan, keepPictureJoins, ReelPlanner } from '../engine/planner.js';
 import { loadPublishedPlaybook } from '../engine/program-presets.js';
 import type { PeakHit } from '../engine/peak-snap.js';
 import type { StyleName } from '../engine/rhythm.js';
@@ -634,6 +635,14 @@ async function processClaimedVideo(
         );
       }
       renderPlan = { ...renderPlan, scenes: nextScenes };
+    }
+    if (!renderFromProject) {
+      renderPlan = keepPictureJoins({
+        ...renderPlan,
+        scenes: lockScenesToLiveSubject(renderPlan.scenes, (scene) =>
+          sourceByCamera.get(scene.position),
+        ),
+      });
     }
     const branding = playbook.branding ?? defaultBrandingFor(payload.program);
     const safeCaption = groundedCaption({

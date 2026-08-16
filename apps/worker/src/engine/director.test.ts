@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { decisionFromReelPlan } from './director.js';
-import { houseCutFromPlan, type ReelPlan } from './planner.js';
+import { houseCutFromPlan, keepPictureJoins, type ReelPlan } from './planner.js';
 
 const plan: ReelPlan = {
   program: 'casa',
@@ -104,5 +104,34 @@ describe('LegacyReelPlannerAdapter', () => {
         duration: 12.35,
       },
     ]);
+  });
+
+  it('turns Casa fadeblack and punch-in into dissolves so later takes stay on picture', () => {
+    const next = keepPictureJoins({
+      program: 'casa' as const,
+      join: 'cut' as const,
+      scenes: [
+        { ...plan.scenes[0]!, transition: 'cut', punchIn: false, motion: 'none' as const },
+        {
+          ...plan.scenes[0]!,
+          transition: 'fadeblack',
+          punchIn: true,
+          motion: 'punch' as const,
+        },
+      ],
+    });
+    expect(next.join).toBe('dissolve');
+    expect(next.scenes.map((scene) => scene.transition)).toEqual(['cut', 'dissolve']);
+    expect(next.scenes[1]?.punchIn).toBe(false);
+    expect(next.scenes[1]?.motion).toBe('none');
+  });
+
+  it('leaves Pulso fadeblack alone', () => {
+    const pulso = keepPictureJoins({
+      program: 'pulso' as const,
+      join: 'cut' as const,
+      scenes: [{ ...plan.scenes[0]!, transition: 'fadeblack' }],
+    });
+    expect(pulso.scenes[0]?.transition).toBe('fadeblack');
   });
 });

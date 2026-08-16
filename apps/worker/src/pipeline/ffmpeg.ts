@@ -11,6 +11,7 @@ import {
   deliveryAudioFilter,
   mixBackgroundMusicGraph,
   mixVoiceoverGraph,
+  loudnormThenFade,
 } from './audio.js';
 import { pickMusicBed } from './music-bed.js';
 import { ffmpegSubtitlesFilter } from './captions.js';
@@ -557,9 +558,8 @@ async function mapAndEncode(
     );
   } else if (plan.audio) {
     const inputIndex = ambientIndex ?? 0;
-    const fadeOutStart = Math.max(0, duration - 0.8);
     graph.push(
-      `[${inputIndex}:a]atrim=start=${plan.audio.source_start_offset}:duration=${duration},asetpts=PTS-STARTPTS,afade=t=in:st=0:d=0.55,afade=t=out:st=${fadeOutStart}:d=0.8,${deliveryAudioFilter()},loudnorm=I=-16:TP=-1.5:LRA=11[outa]`,
+      `[${inputIndex}:a]atrim=start=${plan.audio.source_start_offset}:duration=${duration},asetpts=PTS-STARTPTS,${deliveryAudioFilter()},${loudnormThenFade({ duration, loudnormI: -16 })}[outa]`,
     );
   }
   args.push('-filter_complex', graph.join(';'), '-map', map);

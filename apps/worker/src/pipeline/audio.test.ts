@@ -29,6 +29,7 @@ describe('audio architecture', () => {
     expect(graph).toContain('asplit=2');
     expect(graph).toContain('sidechaincompress');
     expect(graph).toContain('loudnorm=I=-16');
+    expect(graph.indexOf('loudnorm=I=-16')).toBeLessThan(graph.indexOf('afade=t=out'));
     expect(graph).toContain('[outa]');
   });
 
@@ -37,6 +38,7 @@ describe('audio architecture', () => {
     expect(graph).not.toContain('sidechaincompress');
     expect(graph).toContain('[2:a]aresample=48000');
     expect(graph).toContain('channel_layouts=stereo');
+    expect(graph.indexOf('loudnorm=I=-16')).toBeLessThan(graph.indexOf('afade=t=out'));
     expect(graph).toContain('[outa]');
   });
 
@@ -78,6 +80,7 @@ describe('audio architecture', () => {
     expect(graph).toContain('[0:a]atrim=start=2:duration=59');
     expect(graph).toContain('amix=inputs=2');
     expect(graph).toContain('loudnorm=I=-14');
+    expect(graph.indexOf('loudnorm=I=-14')).toBeLessThan(graph.indexOf('afade=t=out'));
     expect(graph).toContain('[outa]');
   });
 
@@ -88,5 +91,6 @@ describe('audio architecture', () => {
       musicStart: 0.84,
     });
     expect(graph).toContain('[5:a]atrim=start=0.84:duration=30');
+    expect(graph.indexOf('loudnorm=I=-14')).toBeLessThan(graph.indexOf('afade=t=out'));
   });
 });

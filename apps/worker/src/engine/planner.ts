@@ -82,6 +82,23 @@ export type HouseCutTake = {
   duration: number;
 };
 
+/** Casa never dips to black between takes. Punch-in on one camera eats the subject. */
+export function keepPictureJoins<T extends Pick<ReelPlan, 'program' | 'scenes' | 'join'>>(
+  plan: T,
+): T {
+  if (plan.program !== 'casa') return plan;
+  return {
+    ...plan,
+    join: 'dissolve',
+    scenes: plan.scenes.map((scene, index) => ({
+      ...scene,
+      transition: index === 0 ? scene.transition : 'dissolve',
+      punchIn: false,
+      motion: scene.motion === 'punch' ? 'none' : scene.motion,
+    })),
+  };
+}
+
 export function houseCutFromPlan(plan: Pick<ReelPlan, 'scenes'>): HouseCutTake[] {
   return plan.scenes.map((scene, index) => ({
     id: scene.recording_id ?? `${scene.camera_id}-${index + 1}`,
