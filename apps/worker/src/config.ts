@@ -207,6 +207,7 @@ export const config = z
       z.boolean().default(false),
     ),
     VIDEO_PIPELINE_VERSION: z.string().default('2.0'),
+    GIT_SHA: z.string().default('unknown'),
     QC_MIN_VISUAL_SCORE: z.coerce.number().int().min(0).max(100).default(0),
     QC_MIN_BRAND_SCORE: z.coerce.number().int().min(0).max(100).default(0),
     QC_MIN_STORY_SCORE: z.coerce.number().int().min(0).max(100).default(0),

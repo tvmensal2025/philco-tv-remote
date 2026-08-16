@@ -6,6 +6,7 @@ import {
 import { hostname } from 'node:os';
 import { config } from '../config.js';
 import { workerId } from '../worker-id.js';
+import { EDITORIAL_RELEASE } from './editorial-thresholds.js';
 
 export const workerStartedAt = new Date().toISOString();
 
@@ -32,6 +33,8 @@ export function workerDescriptor(): WorkerDescriptor {
     version: config.WORKER_VERSION,
     pipelineVersion: config.VIDEO_PIPELINE_VERSION,
     startedAt: workerStartedAt,
+    releaseStamp: EDITORIAL_RELEASE,
+    gitSha: config.GIT_SHA,
     capabilities: workerCapabilities(),
   };
 }

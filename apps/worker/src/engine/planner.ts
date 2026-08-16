@@ -8,6 +8,7 @@ import {
   spreadPreferredStart,
   type PeakHit,
 } from './peak-snap.js';
+import { temporalCandidatesFromPeaks } from './temporal-candidates.js';
 import { cameraRoleOf, playbookFor, type PlaybookBeat } from './playbook.js';
 import type { StyleName } from './rhythm.js';
 import { joinedDuration, type MotionName } from '../pipeline/finish.js';
@@ -206,23 +207,34 @@ export function compileProgram(input: {
     );
     if (!clip) continue;
     const windowDuration = clip.windowDurationSeconds ?? book.targetDuration;
+    const peaks = beat.preferPeak === false ? [] : (input.peaksByCamera.get(clip.cameraId) ?? []);
+    const casaPreferred = clusterPreferredStart({
+      windowStart: clip.startOffsetSeconds,
+      windowDuration,
+      takeDuration: beat.durationSeconds,
+      index: beatIndex,
+      count: book.beats.length,
+      peaks,
+    });
+    const hookCandidate =
+      book.program === 'casa' && beatIndex === 0
+        ? temporalCandidatesFromPeaks({
+            cameraId: clip.cameraId,
+            windowStart: clip.startOffsetSeconds,
+            windowDuration,
+            peaks,
+            takeDuration: beat.durationSeconds,
+          }).sort((left, right) => right.fusedScore - left.fusedScore)[0]
+        : undefined;
     const snapped = snapTake({
       windowStart: clip.startOffsetSeconds,
       windowDuration,
       takeDuration: beat.durationSeconds,
-      peaks: beat.preferPeak === false ? [] : (input.peaksByCamera.get(clip.cameraId) ?? []),
+      peaks,
       usedOffsets: usedOffsets.get(clip.cameraId),
       preferredStart:
         book.program === 'casa'
-          ? clusterPreferredStart({
-              windowStart: clip.startOffsetSeconds,
-              windowDuration,
-              takeDuration: beat.durationSeconds,
-              index: beatIndex,
-              count: book.beats.length,
-              peaks:
-                beat.preferPeak === false ? [] : (input.peaksByCamera.get(clip.cameraId) ?? []),
-            })
+          ? (hookCandidate?.start ?? casaPreferred)
           : exploreSingleCamera
             ? spreadPreferredStart({
                 windowStart: clip.startOffsetSeconds,

@@ -25,9 +25,19 @@ export function clusterHub(input: {
   const windowStart = Math.max(0, input.windowStart);
   const windowEnd = windowStart + Math.max(input.takeDuration, input.windowDuration);
   const usableEnd = Math.max(windowStart, windowEnd - input.takeDuration);
-  const best = [...input.peaks]
-    .filter((peak) => peak.offsetSeconds >= windowStart && peak.offsetSeconds <= windowEnd)
-    .sort((a, b) => b.fusedScore - a.fusedScore)[0];
+  const inWindow = [...input.peaks].filter(
+    (peak) => peak.offsetSeconds >= windowStart && peak.offsetSeconds <= windowEnd,
+  );
+  const neighborhood = (peak: PeakHit) =>
+    inWindow
+      .filter(
+        (other) =>
+          Math.abs(other.offsetSeconds - peak.offsetSeconds) <= CASA_CLUSTER_SPAN_SECONDS / 2,
+      )
+      .reduce((sum, other) => sum + other.fusedScore, 0);
+  const best = [...inWindow].sort(
+    (left, right) => neighborhood(right) - neighborhood(left) || right.fusedScore - left.fusedScore,
+  )[0];
   const fallback = windowStart + Math.min(1.2, input.windowDuration * 0.25);
   const hub = best?.offsetSeconds ?? fallback;
   return Number(Math.max(windowStart, Math.min(usableEnd, hub)).toFixed(3));

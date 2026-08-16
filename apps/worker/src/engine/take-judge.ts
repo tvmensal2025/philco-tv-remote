@@ -4,10 +4,11 @@ import { z } from 'zod';
 import type { EditProgram } from '@reelops/shared';
 import { config } from '../config.js';
 import { pickVisionProvider } from '../adapters/vision-provider.js';
+import { EDITORIAL, type HardRejectCode } from './editorial-thresholds.js';
 import { clusterHub, nextClusterOffset, type PeakHit } from './peak-snap.js';
 import { recomputePlanDuration, type ReelPlan } from './planner.js';
 
-export const MAX_TAKE_REPLACEMENTS = 2;
+export const MAX_TAKE_REPLACEMENTS = EDITORIAL.maxTakeReplacements;
 
 export const takeVerdictSchema = z.object({
   action: z.enum(['keep', 'replace', 'fail']),
@@ -15,12 +16,42 @@ export const takeVerdictSchema = z.object({
   sameScene: z.boolean(),
   blackFrame: z.boolean(),
   publishable: z.boolean(),
+  visualQuality: z.number().min(0).max(100).optional(),
+  contentRelevance: z.number().min(0).max(100).optional(),
+  hardReject: z.boolean().optional(),
+  rejectCode: z
+    .enum(['none', 'black', 'wrong_scene', 'no_subject', 'watermark', 'unusable'])
+    .optional(),
   reason: z.string().trim().min(1).max(160),
 });
 export type TakeVerdict = z.infer<typeof takeVerdictSchema>;
 
+export type TakeJudgeDecision = 'ACCEPT' | 'REJECT' | 'CONDITIONAL';
+
+export type TakeJudgeReport = {
+  takeIndex: number;
+  cameraId: string;
+  sourceIn: number;
+  sourceOut: number;
+  frames: number[];
+  visualQuality: number;
+  contentRelevance: number;
+  subjectInFrame: boolean;
+  sameScene: boolean;
+  hardReject: boolean;
+  rejectCode: HardRejectCode;
+  decision: TakeJudgeDecision;
+  action: 'keep' | 'replace' | 'fail';
+  replacements: number;
+  reason: string;
+  hookScore?: number;
+};
+
 export const reelPublishVerdictSchema = z.object({
   publishable: z.boolean(),
+  hookOk: z.boolean().optional(),
+  wrongScene: z.boolean().optional(),
+  copySafe: z.boolean().optional(),
   reason: z.string().trim().min(1).max(160),
 });
 export type ReelPublishVerdict = z.infer<typeof reelPublishVerdictSchema>;
@@ -41,13 +72,45 @@ export function actionFromVerdict(
   verdict: TakeVerdict,
   replacementsUsed: number,
 ): 'keep' | 'replace' | 'fail' {
-  if (verdict.blackFrame) return 'fail';
+  const code = verdict.rejectCode ?? (verdict.blackFrame ? 'black' : 'none');
+  const visual = verdict.visualQuality ?? (verdict.publishable ? 70 : 40);
+  const relevance =
+    verdict.contentRelevance ??
+    (verdict.subjectInFrame && verdict.publishable && verdict.sameScene ? 80 : 20);
+  const hard =
+    verdict.hardReject === true ||
+    code === 'black' ||
+    code === 'watermark' ||
+    code === 'unusable' ||
+    verdict.blackFrame;
+  if (hard) return 'fail';
+  const prettyButWrong = visual >= 70 && relevance < EDITORIAL.prettyButWrongRelevance;
   const keep =
-    verdict.publishable && verdict.subjectInFrame && verdict.sameScene && verdict.action !== 'fail';
+    verdict.publishable &&
+    verdict.subjectInFrame &&
+    verdict.sameScene &&
+    verdict.action !== 'fail' &&
+    relevance >= EDITORIAL.minContentRelevance &&
+    visual >= EDITORIAL.minVisualQuality &&
+    !prettyButWrong;
   if (keep) return 'keep';
   if (verdict.action === 'fail') return 'fail';
   if (replacementsUsed >= MAX_TAKE_REPLACEMENTS) return 'fail';
   return 'replace';
+}
+
+export function decisionLabel(action: 'keep' | 'replace' | 'fail'): TakeJudgeDecision {
+  if (action === 'keep') return 'ACCEPT';
+  if (action === 'fail') return 'REJECT';
+  return 'CONDITIONAL';
+}
+
+export function hookScore(
+  visualQuality: number,
+  contentRelevance: number,
+  subjectInFrame: boolean,
+) {
+  return Math.round(visualQuality * 0.3 + contentRelevance * 0.5 + (subjectInFrame ? 20 : 0));
 }
 
 export function takeJudgePrompt(input: {
@@ -61,8 +124,9 @@ export function takeJudgePrompt(input: {
     return `You judge THREE JPEG frames from a finished 9:16 restaurant reel (start, middle, end). Program: ${input.program}.
 Do not estimate timestamps. Closed questions only.
 ${programQuestions(input.program)}
+visualQuality = how sharp/lit the frames are (0-100). contentRelevance = does this match the program subject (0-100). A pretty dining room is high visualQuality and low contentRelevance.
 Would you publish this reel as-is?
-Reply ONLY JSON: {"publishable":true,"reason":"max 160 chars"}`;
+Reply ONLY JSON: {"publishable":true,"hookOk":true,"wrongScene":false,"copySafe":true,"reason":"max 160 chars"}`;
   }
   const index = (input.takeIndex ?? 0) + 1;
   const count = input.takeCount ?? 1;
@@ -70,14 +134,16 @@ Reply ONLY JSON: {"publishable":true,"reason":"max 160 chars"}`;
     input.takeIndex && input.takeIndex > 0
       ? `First take (reference image if present): ${input.firstTakeHint ?? 'same stage as take 1'}. sameScene must be true only if THIS take is the same place (stage vs dining room).`
       : 'This is take 1. sameScene must be true.';
-  return `You judge ONE JPEG of a single planned take. Program: ${input.program}. Take ${index}/${count}.
+  return `You judge THREE JPEGs of ONE planned take (start, middle, end of the same take). Program: ${input.program}. Take ${index}/${count}.
 We already chose the timestamp. Answer yes/no. Do not propose a new time.
 ${programQuestions(input.program)}
 ${first}
-blackFrame: true if the frame is black, empty, or unusable.
+blackFrame: true if any frame is black, empty, or unusable.
+visualQuality: 0-100 technical look. contentRelevance: 0-100 match to the program subject. A well-lit customer table is high visualQuality and low contentRelevance.
+hardReject: true only for black, watermark, or unusable. wrong_scene / no_subject should replace, not hardReject, unless every instant on this peak is wrong.
 publishable: would you post THIS take in a restaurant reel?
 action: keep | replace | fail. replace = try another instant on the SAME peak/subject, not another corner of the capture window.
-Reply ONLY JSON: {"action":"keep","subjectInFrame":true,"sameScene":true,"blackFrame":false,"publishable":true,"reason":"max 160 chars"}`;
+Reply ONLY JSON: {"action":"keep","subjectInFrame":true,"sameScene":true,"blackFrame":false,"publishable":true,"visualQuality":80,"contentRelevance":80,"hardReject":false,"rejectCode":"none","reason":"max 160 chars"}`;
 }
 
 function programQuestions(program: EditProgram) {
@@ -134,10 +200,14 @@ export async function refinePlanTakes(input: {
   extractFrame: (source: string, atSeconds: number, dest: string) => Promise<unknown>;
   readJpeg?: (file: string) => Promise<Buffer>;
   ask?: TakeJudgeAsk;
-}): Promise<ReelPlan> {
-  if (!input.ask && !isTakeJudgeConfigured()) return input.plan;
+}): Promise<{ plan: ReelPlan; reports: TakeJudgeReport[] }> {
+  if (!input.ask && !isTakeJudgeConfigured()) {
+    return { plan: input.plan, reports: [] };
+  }
   const readJpeg = input.readJpeg ?? ((file: string) => readFile(file));
   const scenes = [...input.plan.scenes];
+  const reports: TakeJudgeReport[] = [];
+  const rejectedStarts = new Set<string>();
   let firstHint: string | undefined;
   let firstJpeg: Buffer | undefined;
   for (let index = 0; index < scenes.length; index += 1) {
@@ -156,11 +226,16 @@ export async function refinePlanTakes(input: {
     let replacements = 0;
     let current = scene;
     for (;;) {
-      const dest = path.join(input.dir, `take-judge-${index}-${replacements}.jpg`);
-      const at = current.source_start_offset + Math.max(0.2, current.duration * 0.5);
-      await input.extractFrame(current.source_recording_path, at, dest);
-      const jpeg = await readJpeg(dest);
-      const images = firstJpeg && index > 0 ? [firstJpeg, jpeg] : [jpeg];
+      const stamps = EDITORIAL.takeSampleFractions.map(
+        (fraction) => current.source_start_offset + Math.max(0.15, current.duration * fraction),
+      );
+      const jpegs: Buffer[] = [];
+      for (const [frameIndex, at] of stamps.entries()) {
+        const dest = path.join(input.dir, `take-judge-${index}-${replacements}-${frameIndex}.jpg`);
+        await input.extractFrame(current.source_recording_path, at, dest);
+        jpegs.push(await readJpeg(dest));
+      }
+      const images = firstJpeg && index > 0 ? [firstJpeg, ...jpegs] : jpegs;
       const verdict = await judgeTakeImages({
         program: input.plan.program,
         images,
@@ -169,16 +244,45 @@ export async function refinePlanTakes(input: {
         firstTakeHint: firstHint,
         ask: input.ask,
       });
-      const action = actionFromVerdict(verdict, replacements);
+      const visual = verdict.visualQuality ?? (verdict.publishable ? 70 : 40);
+      const relevance =
+        verdict.contentRelevance ?? (verdict.subjectInFrame && verdict.publishable ? 80 : 18);
+      const hook = index === 0 ? hookScore(visual, relevance, verdict.subjectInFrame) : undefined;
+      let action = actionFromVerdict(verdict, replacements);
+      if (index === 0 && action === 'keep' && (hook ?? 0) < EDITORIAL.minHookScore) {
+        action = replacements >= MAX_TAKE_REPLACEMENTS ? 'fail' : 'replace';
+      }
+      const report: TakeJudgeReport = {
+        takeIndex: index,
+        cameraId: current.camera_id,
+        sourceIn: current.source_start_offset,
+        sourceOut: current.source_start_offset + current.duration,
+        frames: stamps.map((value) => Number(value.toFixed(2))),
+        visualQuality: visual,
+        contentRelevance: relevance,
+        subjectInFrame: verdict.subjectInFrame,
+        sameScene: verdict.sameScene,
+        hardReject: action === 'fail',
+        rejectCode: (verdict.rejectCode ??
+          (verdict.blackFrame ? 'black' : 'none')) as HardRejectCode,
+        decision: decisionLabel(action),
+        action,
+        replacements,
+        reason: verdict.reason,
+        hookScore: hook,
+      };
       if (action === 'keep') {
         scenes[index] = current;
+        reports.push(report);
         if (index === 0) {
           firstHint = verdict.reason;
-          firstJpeg = jpeg;
+          firstJpeg = jpegs[1] ?? jpegs[0];
         }
         break;
       }
+      rejectedStarts.add(current.source_start_offset.toFixed(2));
       if (action === 'fail') {
+        reports.push(report);
         throw new Error(`TAKE_JUDGE_FAILED:${verdict.reason}`);
       }
       const nextStart = nextClusterOffset({
@@ -190,16 +294,21 @@ export async function refinePlanTakes(input: {
             .filter((_, sceneIndex) => sceneIndex !== index)
             .map((row) => row.source_start_offset),
           current.source_start_offset,
+          ...[...rejectedStarts].map((value) => Number(value)),
         ],
         peaks,
         hub,
       });
-      if (nextStart == null) throw new Error(`TAKE_JUDGE_FAILED:${verdict.reason}`);
+      reports.push(report);
+      if (nextStart == null || rejectedStarts.has(nextStart.toFixed(2))) {
+        reports.push({ ...report, action: 'fail', decision: 'REJECT', hardReject: true });
+        throw new Error(`TAKE_JUDGE_FAILED:${verdict.reason}`);
+      }
       replacements += 1;
       current = { ...current, source_start_offset: nextStart };
     }
   }
-  return recomputePlanDuration({ ...input.plan, scenes });
+  return { plan: recomputePlanDuration({ ...input.plan, scenes }), reports };
 }
 
 export async function judgeFinishedMp4(input: {
@@ -216,7 +325,9 @@ export async function judgeFinishedMp4(input: {
   }
   const readJpeg = input.readJpeg ?? ((file: string) => readFile(file));
   const duration = Math.max(1, input.durationSeconds);
-  const stamps = [0.35, duration / 2, Math.max(0.4, duration - 0.45)];
+  const stamps = EDITORIAL.reelSampleFractions.map((fraction) =>
+    Math.max(0.2, Math.min(duration - 0.2, duration * fraction)),
+  );
   const images: Buffer[] = [];
   for (const [index, at] of stamps.entries()) {
     const dest = path.join(input.dir, `reel-judge-${index}.jpg`);
@@ -228,7 +339,9 @@ export async function judgeFinishedMp4(input: {
     images,
     ask: input.ask,
   });
-  if (!verdict.publishable) throw new Error(`TAKE_JUDGE_FAILED:${verdict.reason}`);
+  if (!verdict.publishable || verdict.wrongScene) {
+    throw new Error(`TAKE_JUDGE_FAILED:${verdict.reason}`);
+  }
   return verdict;
 }
 

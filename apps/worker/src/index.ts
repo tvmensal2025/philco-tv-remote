@@ -433,7 +433,10 @@ async function heartbeat() {
       const cutoff = new Date(Date.now() - config.WORKER_NODE_TTL_HOURS * 3_600_000).toISOString();
       await db.from('worker_nodes').delete().lt('last_seen_at', cutoff).neq('id', workerId);
     }
-    log.info({ workerId, environment: descriptor.environment }, 'heartbeat ok');
+    log.info(
+      { workerId, environment: descriptor.environment, releaseStamp: descriptor.releaseStamp },
+      'heartbeat ok',
+    );
   } finally {
     clearTimeout(abortTimer);
     heartbeatInFlight = false;

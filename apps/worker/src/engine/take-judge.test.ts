@@ -70,7 +70,27 @@ describe('take judge', () => {
     ).toBe('keep');
   });
 
-  it('fails a black frame immediately', () => {
+  it('rejects a pretty dining table even when visualQuality is high', () => {
+    expect(
+      actionFromVerdict(
+        {
+          action: 'keep',
+          subjectInFrame: false,
+          sameScene: false,
+          blackFrame: false,
+          publishable: true,
+          visualQuality: 94,
+          contentRelevance: 18,
+          hardReject: false,
+          rejectCode: 'wrong_scene',
+          reason: 'mesa bonita, cena errada',
+        },
+        0,
+      ),
+    ).toBe('replace');
+  });
+
+  it('hard-rejects black immediately and never treats it as replace', () => {
     expect(
       actionFromVerdict(
         {
@@ -156,8 +176,10 @@ describe('take judge', () => {
       },
     });
     expect(calls).toBe(2);
-    expect(plan.scenes[0]?.source_start_offset).not.toBe(12);
-    expect(plan.scenes[0]?.source_start_offset ?? 0).toBeLessThan(50);
+    expect(plan.plan.scenes[0]?.source_start_offset).not.toBe(12);
+    expect(plan.plan.scenes[0]?.source_start_offset ?? 0).toBeLessThan(50);
+    expect(plan.reports.some((row) => row.decision === 'CONDITIONAL')).toBe(true);
+    expect(plan.reports.some((row) => row.decision === 'ACCEPT')).toBe(true);
   });
 
   it('fails the finished MP4 when the judge would not publish', async () => {

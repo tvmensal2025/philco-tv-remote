@@ -23,6 +23,8 @@ export type WorkerDescriptor = {
   pipelineVersion: string;
   startedAt: string;
   heartbeatAt?: string;
+  releaseStamp?: string;
+  gitSha?: string;
   capabilities: WorkerCapabilities;
 };
 

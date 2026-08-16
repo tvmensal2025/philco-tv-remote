@@ -103,7 +103,10 @@ import { db, log } from '../services.js';
 import { workerId } from '../worker-id.js';
 import { houseCutFromPlan, keepPictureJoins, ReelPlanner } from '../engine/planner.js';
 import { assignStrategicFxAndSpeed, shouldAssignStrategicFx } from '../engine/fx-pass.js';
-import { judgeFinishedMp4, refinePlanTakes } from '../engine/take-judge.js';
+import { judgeFinishedMp4, refinePlanTakes, type TakeJudgeReport } from '../engine/take-judge.js';
+import { EDITORIAL_RELEASE } from '../engine/editorial-thresholds.js';
+import { pairCompatibility } from '../engine/temporal-candidates.js';
+import { workerDescriptor } from '../engine/worker-descriptor.js';
 import { loadPublishedPlaybook } from '../engine/program-presets.js';
 import type { PeakHit } from '../engine/peak-snap.js';
 import type { StyleName } from '../engine/rhythm.js';
@@ -147,6 +150,7 @@ async function processClaimedVideo(
   await mkdir(config.WORK_DIR, { recursive: true });
   const dir = await mkdtemp(path.join(config.WORK_DIR, 'job-'));
   const timings: Record<string, number> = {};
+  let takeJudgeReports: TakeJudgeReport[] = [];
   try {
     await setStatus(
       payload.tenantId,
@@ -652,20 +656,30 @@ async function processClaimedVideo(
       });
       await setStatus(payload.tenantId, payload.reelId, 'rendering', 58, 'Conferindo cada take');
       const judgeStarted = Date.now();
-      renderPlan = await refinePlanTakes({
+      const judged = await refinePlanTakes({
         plan: renderPlan,
         peaksByCamera,
         windows: windowByCamera,
         dir,
         extractFrame: extractJpegFrameAt,
       });
+      renderPlan = judged.plan;
+      takeJudgeReports = judged.reports;
       timings.takeJudgeMs = Date.now() - judgeStarted;
       log.info(
         {
           ...jobLog,
+          release_stamp: EDITORIAL_RELEASE,
           takes: renderPlan.scenes.map(
             (scene) => `C${scene.position}:${scene.source_start_offset.toFixed(1)}s`,
           ),
+          decisions: takeJudgeReports.map((row) => ({
+            take: row.takeIndex,
+            decision: row.decision,
+            quality: row.visualQuality,
+            relevance: row.contentRelevance,
+            reason: row.reason,
+          })),
           ms: timings.takeJudgeMs,
         },
         'take judge',
@@ -934,6 +948,9 @@ async function processClaimedVideo(
         analysis: plan.reason,
         provider: plan.provider,
         model: plan.model,
+        release_stamp: EDITORIAL_RELEASE,
+        worker: workerDescriptor(),
+        take_judge: takeJudgeReports,
         cameras: renderPlan.scenes.map((scene) => scene.camera_id),
         sourceAudio: Boolean(renderPlan.audio),
         music_bed: musicBed
@@ -1011,24 +1028,58 @@ async function processClaimedVideo(
             }
           : null,
         edit_mode: editorial?.recommendedMode ?? null,
-        scenes: renderPlan.scenes.map((scene) => ({
-          cam: `C${scene.position}`,
-          cameraId: scene.camera_id,
-          recordingId: scene.recording_id ?? null,
-          role: scene.role,
-          desc: scene.reason,
-          offset: scene.source_start_offset,
-          duration: scene.duration,
-          transition: scene.transition,
-          punchIn: scene.punchIn,
-          motion: scene.motion,
-          crop: scene.crop ?? null,
-          cropMode: scene.cropMode ?? null,
-          cropTight: scene.cropTight ?? null,
-          cameraScore:
-            editorial?.scores.find((row) => row.cameraPosition === scene.position)?.score ?? null,
-          coherenceScore: editorial?.multicameraConfidence ?? null,
-        })),
+        scenes: renderPlan.scenes.map((scene, index) => {
+          const report = takeJudgeReports.find(
+            (row) => row.takeIndex === index && row.decision === 'ACCEPT',
+          );
+          const previous = renderPlan.scenes[index - 1];
+          const pair = previous
+            ? pairCompatibility(
+                {
+                  cameraId: previous.camera_id,
+                  start: previous.source_start_offset,
+                  end: previous.source_start_offset + previous.duration,
+                  peak: previous.source_start_offset,
+                  fusedScore: 0,
+                  usable: true,
+                },
+                {
+                  cameraId: scene.camera_id,
+                  start: scene.source_start_offset,
+                  end: scene.source_start_offset + scene.duration,
+                  peak: scene.source_start_offset,
+                  fusedScore: 0,
+                  usable: true,
+                },
+              )
+            : null;
+          return {
+            cam: `C${scene.position}`,
+            cameraId: scene.camera_id,
+            recordingId: scene.recording_id ?? null,
+            role: scene.role,
+            desc: scene.reason,
+            offset: scene.source_start_offset,
+            sourceIn: scene.source_start_offset,
+            sourceOut: scene.source_start_offset + scene.duration,
+            duration: scene.duration,
+            transition: scene.transition,
+            punchIn: scene.punchIn,
+            motion: scene.motion,
+            crop: scene.crop ?? null,
+            cropMode: scene.cropMode ?? null,
+            cropTight: scene.cropTight ?? null,
+            cameraScore:
+              editorial?.scores.find((row) => row.cameraPosition === scene.position)?.score ?? null,
+            coherenceScore: editorial?.multicameraConfidence ?? null,
+            pairCompatibility: pair,
+            visualQuality: report?.visualQuality ?? null,
+            contentRelevance: report?.contentRelevance ?? null,
+            hookScore: report?.hookScore ?? null,
+            judgeDecision: report?.decision ?? null,
+            judgeReason: report?.reason ?? null,
+          };
+        }),
       },
     });
 

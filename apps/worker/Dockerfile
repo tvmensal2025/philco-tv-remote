@@ -11,6 +11,8 @@ COPY apps/worker apps/worker
 RUN npm run build -w @reelops/shared && npm run build -w @reelops/worker
 
 FROM node:22-bookworm-slim AS runtime
+ARG GIT_SHA=unknown
+ENV GIT_SHA=$GIT_SHA
 RUN node -e "if (Number(process.versions.node.split('.')[0]) < 22) { console.error('Need Node 22+, got', process.version); process.exit(1) }"
 RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg ca-certificates && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
