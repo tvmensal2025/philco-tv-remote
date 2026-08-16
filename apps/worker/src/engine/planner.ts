@@ -8,9 +8,10 @@ import {
   spreadPreferredStart,
   type PeakHit,
 } from './peak-snap.js';
-import { temporalCandidatesFromPeaks } from './temporal-candidates.js';
+import { temporalCandidatesFromPeaks, pairAssembly, pairKind } from './temporal-candidates.js';
 import { cameraRoleOf, playbookFor, type PlaybookBeat } from './playbook.js';
 import type { StyleName } from './rhythm.js';
+import { EDITORIAL } from './editorial-thresholds.js';
 import { joinedDuration, type MotionName } from '../pipeline/finish.js';
 
 export type ReelPlanScene = {
@@ -199,7 +200,17 @@ export function compileProgram(input: {
       ...(input.analysis?.cameraRankings?.map((row) => row.score) ?? []),
     ) >= HIGH_QUALITY_CAMERA_SCORE;
 
-  for (const [beatIndex, beat] of book.beats.entries()) {
+  const casaHubs = [
+    ...new Set(
+      [...(input.hubsByCamera?.values() ?? [])].flat().filter((hub) => Number.isFinite(hub)),
+    ),
+  ];
+  const beats =
+    book.program === 'casa' && casaHubs.length
+      ? book.beats.slice(0, Math.min(book.beats.length, Math.max(2, casaHubs.length + 1)))
+      : book.beats;
+
+  for (const [beatIndex, beat] of beats.entries()) {
     const clip = pickClip(
       clips,
       beat,
@@ -221,12 +232,16 @@ export function compileProgram(input: {
     const hubForBeat = scoutedHubs.length ? scoutedHubs[beatIndex % scoutedHubs.length] : forcedHub;
     const indexOnHub = scoutedHubs.length ? Math.floor(beatIndex / scoutedHubs.length) : beatIndex;
     const countOnHub = scoutedHubs.length
-      ? Math.ceil(book.beats.length / scoutedHubs.length)
-      : book.beats.length;
+      ? Math.ceil(beats.length / scoutedHubs.length)
+      : beats.length;
+    const takeDuration =
+      book.program === 'casa' && scoutedHubs.length
+        ? Math.min(beat.durationSeconds, EDITORIAL.maxCasaTakeSeconds)
+        : beat.durationSeconds;
     const casaPreferred = clusterPreferredStart({
       windowStart: clip.startOffsetSeconds,
       windowDuration,
-      takeDuration: beat.durationSeconds,
+      takeDuration,
       index: indexOnHub,
       count: countOnHub,
       peaks,
@@ -239,14 +254,14 @@ export function compileProgram(input: {
             windowStart: clip.startOffsetSeconds,
             windowDuration,
             peaks,
-            takeDuration: beat.durationSeconds,
+            takeDuration,
             hub: forcedHub,
           }).sort((left, right) => right.fusedScore - left.fusedScore)[0]
         : undefined;
     const snapped = snapTake({
       windowStart: clip.startOffsetSeconds,
       windowDuration,
-      takeDuration: beat.durationSeconds,
+      takeDuration,
       peaks,
       usedOffsets: usedOffsets.get(clip.cameraId),
       preferredStart:
@@ -256,12 +271,25 @@ export function compileProgram(input: {
             ? spreadPreferredStart({
                 windowStart: clip.startOffsetSeconds,
                 windowDuration,
-                takeDuration: beat.durationSeconds,
+                takeDuration,
                 index: beatIndex,
-                count: book.beats.length,
+                count: beats.length,
               })
             : undefined,
     });
+    if (book.program === 'casa' && casaHubs.length && scenes.length) {
+      const previous = scenes.at(-1)!;
+      const farJumpsUsed = scenes.filter(
+        (scene, index) =>
+          index > 0 && pairKind(candidateOf(scenes[index - 1]!), candidateOf(scene)) === 'act_cut',
+      ).length;
+      const pair = pairAssembly(
+        candidateOf(previous),
+        candidateOf({ ...previous, camera_id: clip.cameraId, source_start_offset: snapped.start }),
+        farJumpsUsed,
+      );
+      if (!pair.ok) continue;
+    }
     usedOffsets.set(clip.cameraId, [...(usedOffsets.get(clip.cameraId) ?? []), snapped.start]);
     lastCameraId = clip.cameraId;
     scenes.push({
@@ -350,6 +378,17 @@ export function compileProgram(input: {
 
 function skip(role: string): Error {
   return new Error(`SKIP_PROGRAM:MISSING_ROLE:${role}`);
+}
+
+function candidateOf(scene: Pick<ReelPlanScene, 'camera_id' | 'source_start_offset' | 'duration'>) {
+  return {
+    cameraId: scene.camera_id,
+    start: scene.source_start_offset,
+    end: scene.source_start_offset + scene.duration,
+    peak: scene.source_start_offset,
+    fusedScore: 0,
+    usable: true,
+  };
 }
 
 function quality(clip: ClipCandidate, beat: PlaybookBeat, cameraScores?: Map<number, number>) {

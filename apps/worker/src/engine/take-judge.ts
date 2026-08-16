@@ -23,6 +23,7 @@ export const takeVerdictSchema = z.object({
     .enum(['none', 'black', 'wrong_scene', 'no_subject', 'watermark', 'unusable'])
     .optional(),
   customersOnly: z.boolean().optional(),
+  usableUntil: z.number().min(0.18).max(1).optional(),
   reason: z.string().trim().min(1).max(160),
 });
 export type TakeVerdict = z.infer<typeof takeVerdictSchema>;
@@ -172,6 +173,17 @@ export function hookScore(
   return Math.round(visualQuality * 0.3 + contentRelevance * 0.5 + (subjectInFrame ? 20 : 0));
 }
 
+export function trimKeptDuration(
+  requested: number,
+  usableUntil: number | undefined,
+  program: EditProgram,
+) {
+  const fraction = Math.min(1, Math.max(0.18, usableUntil ?? 1));
+  let duration = requested * fraction;
+  if (program === 'casa') duration = Math.min(duration, EDITORIAL.maxCasaTakeSeconds);
+  return Number(Math.max(EDITORIAL.minTakeSeconds, Math.min(requested, duration)).toFixed(3));
+}
+
 export function eligibleScoutHubs(reports: HubScoutReport[]): HubScoutReport[] {
   return reports
     .filter(
@@ -275,8 +287,9 @@ contentRelevance: 0-100 match to the LIVE SHOW subject. Customer tables without 
 customersOnly: true if the picture is mainly seated customers, tables, bar, or dining room and there is no performer/stage. If customersOnly is true, subjectInFrame MUST be false and contentRelevance MUST be 0-25.
 hardReject: true only for black, watermark, or unusable. wrong_scene / no_subject should replace, not hardReject, unless every instant on this peak is wrong.
 publishable: would you post THIS take in a live-show Casa reel? Dining-room-only is not publishable.
+usableUntil: 1 if every sample is the live show. If later frames leave the stage, 0.5 (keep the first half) or 0.18 (hook only).
 action: keep | replace | fail. replace = try another instant on the SAME peak/subject, not another corner of the capture window.
-Reply ONLY JSON: {"action":"keep","subjectInFrame":true,"sameScene":true,"blackFrame":false,"publishable":true,"visualQuality":80,"contentRelevance":80,"customersOnly":false,"hardReject":false,"rejectCode":"none","reason":"max 160 chars"}`;
+Reply ONLY JSON: {"action":"keep","subjectInFrame":true,"sameScene":true,"blackFrame":false,"publishable":true,"visualQuality":80,"contentRelevance":80,"customersOnly":false,"hardReject":false,"rejectCode":"none","usableUntil":1,"reason":"max 160 chars"}`;
 }
 
 function programQuestions(program: EditProgram) {
@@ -416,8 +429,15 @@ export async function refinePlanTakes(input: {
         customersOnly,
       };
       if (action === 'keep') {
-        kept.push(current);
-        reports.push(report);
+        const keptScene = {
+          ...current,
+          duration: trimKeptDuration(current.duration, verdict.usableUntil, input.plan.program),
+        };
+        kept.push(keptScene);
+        reports.push({
+          ...report,
+          sourceOut: keptScene.source_start_offset + keptScene.duration,
+        });
         if (kept.length === 1) {
           firstHint = verdict.reason;
           firstJpeg = jpegs[1] ?? jpegs[0];

@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import { distinctClusterHubs } from './peak-snap.js';
-import { pairCompatibility, temporalCandidatesFromPeaks } from './temporal-candidates.js';
+import {
+  pairAssembly,
+  pairCompatibility,
+  temporalCandidatesFromPeaks,
+} from './temporal-candidates.js';
 
 describe('temporal candidates', () => {
   it('keeps candidate windows on the live peak instead of the far dining-room offset', () => {
@@ -48,5 +52,23 @@ describe('temporal candidates', () => {
     const far = { ...near, start: 200, end: 212, peak: 210 };
     expect(pairCompatibility(near, { ...near, start: 20, end: 32, peak: 22 }).ok).toBe(true);
     expect(pairCompatibility(near, far).ok).toBe(false);
+  });
+
+  it('allows one act cut and rejects a loop or a second far jump', () => {
+    const hook = {
+      cameraId: 'cam-1',
+      start: 600,
+      end: 608,
+      peak: 600,
+      fusedScore: 90,
+      usable: true,
+    };
+    const loop = { ...hook, start: 605.4, end: 613.4, peak: 605 };
+    const act = { ...hook, start: 788, end: 796, peak: 792 };
+    const again = { ...hook, start: 900, end: 908, peak: 900 };
+    expect(pairAssembly(hook, loop).ok).toBe(false);
+    expect(pairAssembly(hook, act).ok).toBe(true);
+    expect(pairAssembly(hook, act).reason).toBe('act_cut');
+    expect(pairAssembly(act, again, 1).ok).toBe(false);
   });
 });

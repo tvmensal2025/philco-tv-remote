@@ -9,6 +9,7 @@ import {
   refinePlanTakes,
   scoutClusterHubs,
   takeVerdictSchema,
+  trimKeptDuration,
   type TakeVerdict,
 } from './take-judge.js';
 import type { ReelPlan } from './planner.js';
@@ -321,6 +322,35 @@ it('keeps the approved hook and drops later dining takes instead of failing the 
       (scene) => scene.source_start_offset < 650 || scene.source_start_offset > 750,
     ),
   ).toBe(true);
+});
+
+it('trims a kept Casa take to the usable stage window instead of padding 12s', () => {
+  expect(trimKeptDuration(12, 1, 'casa')).toBeLessThanOrEqual(8.5);
+  expect(trimKeptDuration(12, 0.5, 'casa')).toBe(6);
+  expect(trimKeptDuration(12, 1, 'oficio')).toBe(12);
+});
+
+it('keeps the hook shorter than a dining tail when the VLM marks usableUntil', async () => {
+  const judged = await refinePlanTakes({
+    plan: casaPlan(600),
+    peaksByCamera: new Map([['cam-1', [{ offsetSeconds: 600.3, fusedScore: 90 }]]]),
+    windows: new Map([['cam-1', { start: 580, duration: 240 }]]),
+    dir: '/tmp',
+    extractFrame: async () => undefined,
+    readJpeg: async () => Buffer.from('jpg'),
+    ask: async () => ({
+      action: 'keep',
+      subjectInFrame: true,
+      sameScene: true,
+      blackFrame: false,
+      publishable: true,
+      visualQuality: 80,
+      contentRelevance: 80,
+      usableUntil: 0.5,
+      reason: 'Performer visible on stage with audience',
+    }),
+  });
+  expect(judged.plan.scenes[0]?.duration).toBe(6);
 });
 
 it('fails the finished MP4 when the judge would not publish', async () => {

@@ -123,6 +123,13 @@ describe('validated four-program standard', () => {
     expect(copy.cta).toBe('Peça no salão');
   });
 
+  it('does not burn a placeholder restaurant name as wordmark or end card', () => {
+    const copy = programBrandCopy({ restaurantName: 'Restaurante', program: 'casa' });
+    expect(copy.wordmark).toBe('');
+    expect(copy.endCard).toBe('');
+    expect(copy.title).toBe('');
+  });
+
   it('fills logo when an old published Casa spec omitted branding, without turning the title on', () => {
     const { branding, ...legacy } = validatedProgramPresets.casa;
     expect(branding.title).toBe(false);

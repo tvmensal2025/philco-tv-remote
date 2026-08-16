@@ -72,19 +72,25 @@ export function brandWordmark(name: string) {
   return name.trim().slice(0, 12);
 }
 
+export function isPlaceholderVenueName(name: string) {
+  return /^(restaurante|restaurant|casa|teste|test)$/i.test(name.trim());
+}
+
 export function programBrandCopy(input: {
   restaurantName: string;
   program: EditProgram;
   cta?: string | null;
 }) {
-  const name = input.restaurantName.trim() || programShortLabels[input.program];
+  const raw = input.restaurantName.trim();
+  const placeholder = !raw || isPlaceholderVenueName(raw);
+  const name = placeholder ? '' : raw;
   const cta = input.cta?.trim().slice(0, 40) || 'Peça no salão';
   return {
     title: name.slice(0, 42),
-    lowerThird: `${programShortLabels[input.program]} · ${name}`.slice(0, 48),
+    lowerThird: name ? `${programShortLabels[input.program]} · ${name}`.slice(0, 48) : '',
     cta,
     endCard: name.slice(0, 42),
-    wordmark: brandWordmark(name),
+    wordmark: name ? brandWordmark(name) : '',
   };
 }
 
