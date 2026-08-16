@@ -22,6 +22,7 @@ export const takeVerdictSchema = z.object({
   rejectCode: z
     .enum(['none', 'black', 'wrong_scene', 'no_subject', 'watermark', 'unusable'])
     .optional(),
+  customersOnly: z.boolean().optional(),
   reason: z.string().trim().min(1).max(160),
 });
 export type TakeVerdict = z.infer<typeof takeVerdictSchema>;
@@ -73,9 +74,19 @@ export type HubScoutReport = {
   visualQuality: number;
   contentRelevance: number;
   subjectInFrame: boolean;
+  customersOnly: boolean;
   hardReject: boolean;
   reason: string;
 };
+
+export function customersOnlyFromVerdict(verdict: TakeVerdict): boolean {
+  if (verdict.customersOnly === true) return true;
+  if (verdict.customersOnly === false) return false;
+  const text = verdict.reason.toLowerCase();
+  const dining = /(customer|dining|tables?|mesa|seated|dining room)/i.test(text);
+  const stage = /(performer|stage|singer|band|palco|cantor|instrument)/i.test(text);
+  return dining && !stage;
+}
 
 export function isTakeJudgeConfigured() {
   return (
@@ -91,11 +102,13 @@ export function actionFromVerdict(
   verdict: TakeVerdict,
   replacementsUsed: number,
 ): 'keep' | 'replace' | 'fail' {
+  const customersOnly = customersOnlyFromVerdict(verdict);
   const code = verdict.rejectCode ?? (verdict.blackFrame ? 'black' : 'none');
   const visual = verdict.visualQuality ?? (verdict.publishable ? 70 : 40);
-  const relevance =
-    verdict.contentRelevance ??
-    (verdict.subjectInFrame && verdict.publishable && verdict.sameScene ? 80 : 20);
+  const relevance = customersOnly
+    ? Math.min(verdict.contentRelevance ?? 18, EDITORIAL.prettyButWrongRelevance - 1)
+    : (verdict.contentRelevance ??
+      (verdict.subjectInFrame && verdict.publishable && verdict.sameScene ? 80 : 20));
   const hard =
     verdict.hardReject === true ||
     code === 'black' ||
@@ -103,12 +116,14 @@ export function actionFromVerdict(
     code === 'unusable' ||
     verdict.blackFrame;
   if (hard) return 'fail';
-  const prettyButWrong = visual >= 70 && relevance < EDITORIAL.prettyButWrongRelevance;
+  const prettyButWrong =
+    customersOnly || (visual >= 70 && relevance < EDITORIAL.prettyButWrongRelevance);
   const keep =
     verdict.publishable &&
     verdict.subjectInFrame &&
     verdict.sameScene &&
     verdict.action !== 'fail' &&
+    !customersOnly &&
     relevance >= EDITORIAL.minContentRelevance &&
     visual >= EDITORIAL.minVisualQuality &&
     !prettyButWrong;
@@ -134,7 +149,13 @@ export function hookScore(
 
 export function pickScoutedHub(reports: HubScoutReport[]): HubScoutReport | null {
   const eligible = reports
-    .filter((row) => !row.hardReject && row.contentRelevance >= EDITORIAL.minContentRelevance)
+    .filter(
+      (row) =>
+        !row.hardReject &&
+        !row.customersOnly &&
+        row.subjectInFrame &&
+        row.contentRelevance >= EDITORIAL.minContentRelevance,
+    )
     .sort(
       (left, right) =>
         right.contentRelevance - left.contentRelevance || right.visualQuality - left.visualQuality,
@@ -168,15 +189,18 @@ export async function scoutClusterHubs(input: {
       ask: input.ask,
     });
     const visual = verdict.visualQuality ?? (verdict.publishable ? 70 : 40);
-    const relevance =
-      verdict.contentRelevance ?? (verdict.subjectInFrame && verdict.publishable ? 80 : 18);
+    const customersOnly = customersOnlyFromVerdict(verdict);
+    const relevance = customersOnly
+      ? Math.min(verdict.contentRelevance ?? 18, EDITORIAL.prettyButWrongRelevance - 1)
+      : (verdict.contentRelevance ?? (verdict.subjectInFrame && verdict.publishable ? 80 : 18));
     const code = verdict.rejectCode ?? (verdict.blackFrame ? 'black' : 'none');
     reports.push({
       cameraId: input.cameraId,
       hub,
       visualQuality: visual,
       contentRelevance: relevance,
-      subjectInFrame: verdict.subjectInFrame,
+      subjectInFrame: customersOnly ? false : verdict.subjectInFrame,
+      customersOnly,
       hardReject:
         verdict.blackFrame ||
         verdict.hardReject === true ||
@@ -197,11 +221,12 @@ export function takeJudgePrompt(input: {
   firstTakeHint?: string;
 }) {
   if (input.kind === 'reel') {
-    return `You judge THREE JPEG frames from a finished 9:16 restaurant reel (start, middle, end). Program: ${input.program}.
+    return `You judge THREE JPEG frames from a finished 9:16 Casa/live-show reel (start, middle, end). Program: ${input.program}.
 Do not estimate timestamps. Closed questions only.
 ${programQuestions(input.program)}
-visualQuality = how sharp/lit the frames are (0-100). contentRelevance = does this match the program subject (0-100). A pretty dining room is high visualQuality and low contentRelevance.
-Would you publish this reel as-is?
+visualQuality = how sharp/lit the frames are (0-100). contentRelevance = match to the LIVE SHOW (performer/stage), never "nice restaurant". A pretty dining room is high visualQuality and low contentRelevance.
+wrongScene = true if any frame is mainly customer tables without the show.
+Would you publish this as a live-show reel?
 Reply ONLY JSON: {"publishable":true,"hookOk":true,"wrongScene":false,"copySafe":true,"reason":"max 160 chars"}`;
   }
   const index = (input.takeIndex ?? 0) + 1;
@@ -210,21 +235,23 @@ Reply ONLY JSON: {"publishable":true,"hookOk":true,"wrongScene":false,"copySafe"
     input.takeIndex && input.takeIndex > 0
       ? `First take (reference image if present): ${input.firstTakeHint ?? 'same stage as take 1'}. sameScene must be true only if THIS take is the same place (stage vs dining room).`
       : 'This is take 1. sameScene must be true.';
-  return `You judge THREE JPEGs of ONE planned take (start, middle, end of the same take). Program: ${input.program}. Take ${index}/${count}.
+  return `You judge JPEG(s) of ONE planned take. Program: ${input.program}. Take ${index}/${count}.
 We already chose the timestamp. Answer yes/no. Do not propose a new time.
 ${programQuestions(input.program)}
 ${first}
 blackFrame: true if any frame is black, empty, or unusable.
-visualQuality: 0-100 technical look. contentRelevance: 0-100 match to the program subject. A well-lit customer table is high visualQuality and low contentRelevance.
+visualQuality: 0-100 technical look.
+contentRelevance: 0-100 match to the LIVE SHOW subject. Customer tables without a performer MUST be 0-25 even if beautiful.
+customersOnly: true if the picture is mainly seated customers, tables, bar, or dining room and there is no performer/stage. If customersOnly is true, subjectInFrame MUST be false and contentRelevance MUST be 0-25.
 hardReject: true only for black, watermark, or unusable. wrong_scene / no_subject should replace, not hardReject, unless every instant on this peak is wrong.
-publishable: would you post THIS take in a restaurant reel?
+publishable: would you post THIS take in a live-show Casa reel? Dining-room-only is not publishable.
 action: keep | replace | fail. replace = try another instant on the SAME peak/subject, not another corner of the capture window.
-Reply ONLY JSON: {"action":"keep","subjectInFrame":true,"sameScene":true,"blackFrame":false,"publishable":true,"visualQuality":80,"contentRelevance":80,"hardReject":false,"rejectCode":"none","reason":"max 160 chars"}`;
+Reply ONLY JSON: {"action":"keep","subjectInFrame":true,"sameScene":true,"blackFrame":false,"publishable":true,"visualQuality":80,"contentRelevance":80,"customersOnly":false,"hardReject":false,"rejectCode":"none","reason":"max 160 chars"}`;
 }
 
 function programQuestions(program: EditProgram) {
   if (program === 'casa') {
-    return 'Casa: subjectInFrame = performer/stage in frame, not customer tables. sameScene = same stage as take 1, not a jump to the dining room.';
+    return 'Casa is a LIVE SHOW reel. subjectInFrame = a performer, instrument, or stage is clearly visible. customersOnly = seated diners/tables/bar with no performer. Dining room is the wrong scene even if it is a restaurant.';
   }
   if (program === 'oficio') {
     return 'Oficio: subjectInFrame = hands or station visible.';

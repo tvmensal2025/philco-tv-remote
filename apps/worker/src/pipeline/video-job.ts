@@ -1170,7 +1170,9 @@ async function processClaimedVideo(
     const attempts = Number(job.opts.attempts ?? 1);
     const finalAttempt = job.attemptsMade + 1 >= attempts;
     const message = error instanceof Error ? error.message : 'Erro desconhecido';
-    if (error instanceof TakeJudgeError) takeJudgeReports = error.reports;
+    if (error instanceof TakeJudgeError && error.reports.length) {
+      takeJudgeReports = error.reports;
+    }
     if (message === 'JOB_NOT_PROCESSABLE' || message === 'STALE_EXECUTION') {
       throw new UnrecoverableError(message);
     }
