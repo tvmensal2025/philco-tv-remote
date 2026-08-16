@@ -130,7 +130,11 @@ function offsetOnHub(input: {
   const nearby = [...input.peaks]
     .filter((peak) => Math.abs(peak.offsetSeconds - input.hub) <= radius)
     .filter((peak) => used.every((start) => Math.abs(peak.offsetSeconds - start) >= 1.4))
-    .sort((a, b) => b.fusedScore - a.fusedScore);
+    .sort(
+      (left, right) =>
+        Math.abs(left.offsetSeconds - input.hub) - Math.abs(right.offsetSeconds - input.hub) ||
+        right.fusedScore - left.fusedScore,
+    );
   const preferred = nearby[0]?.offsetSeconds ?? input.hub;
   if (Math.abs(preferred - input.hub) > radius) return null;
   const snapped = snapTake({

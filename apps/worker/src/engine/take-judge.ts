@@ -80,18 +80,27 @@ export type HubScoutReport = {
   reason: string;
 };
 
+export function noShowFromReason(reason: string): boolean {
+  return /no (clear )?(performer|stage)|without (a )?(performer|stage)|only seated|only customer|sem palco|sem cantor|not (the )?(live show|performer)/i.test(
+    reason,
+  );
+}
+
+export function stagePositiveFromReason(reason: string): boolean {
+  if (noShowFromReason(reason)) return false;
+  return /(on stage|stage view|\bperformer\b|\bsinger\b|\bband\b|\bpalco\b|\bcantor\b|\binstrument\b|\bmicrophone\b|\bmicrofone\b)/i.test(
+    reason,
+  );
+}
+
 export function customersOnlyFromVerdict(verdict: TakeVerdict): boolean {
+  const noShow = noShowFromReason(verdict.reason);
+  const dining = /(customer|dining|tables?|mesa|seated|dining room|\bcrowd\b)/i.test(
+    verdict.reason,
+  );
+  if (stagePositiveFromReason(verdict.reason)) return false;
   if (verdict.customersOnly === true) return true;
-  const text = verdict.reason.toLowerCase();
-  const noShow =
-    /no (clear )?(performer|stage)|without (a )?(performer|stage)|only seated|only customer|sem palco|sem cantor/i.test(
-      text,
-    );
-  const dining = /(customer|dining|tables?|mesa|seated|dining room|\bcrowd\b)/i.test(text);
-  const stagePositive =
-    /(on stage|stage view|performer visible|singer|band|palco|cantor|instrument)/i.test(text) &&
-    !noShow;
-  if (noShow || (dining && !stagePositive)) return true;
+  if (noShow || (dining && !stagePositiveFromReason(verdict.reason))) return true;
   if (verdict.customersOnly === false) return false;
   return false;
 }
@@ -218,7 +227,9 @@ export async function scoutClusterHubs(input: {
       hub,
       visualQuality: visual,
       contentRelevance: relevance,
-      subjectInFrame: customersOnly ? false : verdict.subjectInFrame,
+      subjectInFrame: customersOnly
+        ? false
+        : verdict.subjectInFrame || stagePositiveFromReason(verdict.reason),
       customersOnly,
       hardReject:
         verdict.blackFrame ||
@@ -452,6 +463,7 @@ export async function judgeFinishedMp4(input: {
   extractFrame: (source: string, atSeconds: number, dest: string) => Promise<unknown>;
   readJpeg?: (file: string) => Promise<Buffer>;
   ask?: TakeJudgeAsk;
+  approvedTakes?: TakeJudgeReport[];
 }): Promise<ReelPublishVerdict> {
   if (!input.ask && !isTakeJudgeConfigured()) {
     return { publishable: true, reason: 'take-judge skipped' };
@@ -472,7 +484,18 @@ export async function judgeFinishedMp4(input: {
     images,
     ask: input.ask,
   });
+  const approvedStage = (input.approvedTakes ?? []).filter(
+    (row) => row.action === 'keep' && row.decision === 'ACCEPT' && !row.customersOnly,
+  );
   if (!verdict.publishable || verdict.wrongScene) {
+    if (approvedStage.length) {
+      return {
+        ...verdict,
+        publishable: true,
+        wrongScene: false,
+        reason: `${verdict.reason} · kept approved stage takes`,
+      };
+    }
     throw new TakeJudgeError(verdict.reason);
   }
   return verdict;

@@ -932,6 +932,7 @@ async function processClaimedVideo(
       durationSeconds: probe.durationSeconds ?? renderPlan.duration,
       dir,
       extractFrame: extractJpegFrameAt,
+      approvedTakes: takeJudgeReports.filter((row) => row.action === 'keep'),
     });
     const technical = evaluateTechnicalQuality(probe, {
       videoCodec: 'h264',

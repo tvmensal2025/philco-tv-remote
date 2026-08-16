@@ -7,6 +7,7 @@ import {
   judgeTakeImages,
   pickScoutedHub,
   refinePlanTakes,
+  scoutClusterHubs,
   takeVerdictSchema,
   type TakeVerdict,
 } from './take-judge.js';
@@ -334,6 +335,70 @@ it('fails the finished MP4 when the judge would not publish', async () => {
       ask: async () => ({ publishable: false, reason: 'mesas no meio do filme' }),
     }),
   ).rejects.toThrow(/TAKE_JUDGE_FAILED/);
+});
+
+it('does not veto a finished MP4 whose kept takes are already approved stage', async () => {
+  const verdict = await judgeFinishedMp4({
+    program: 'casa',
+    mp4: 'reel.mp4',
+    durationSeconds: 12,
+    dir: '/tmp',
+    extractFrame: async () => undefined,
+    readJpeg: async () => Buffer.from('jpg'),
+    ask: async () => ({
+      publishable: false,
+      wrongScene: true,
+      reason: 'Most frames show customers dining, not the live show or performer clearly.',
+    }),
+    approvedTakes: [
+      {
+        takeIndex: 0,
+        cameraId: 'cam-1',
+        sourceIn: 600,
+        sourceOut: 612,
+        frames: [602, 606, 610],
+        visualQuality: 80,
+        contentRelevance: 80,
+        subjectInFrame: true,
+        sameScene: true,
+        hardReject: false,
+        rejectCode: 'none',
+        decision: 'ACCEPT',
+        action: 'keep',
+        replacements: 0,
+        reason: 'Performer visible on stage',
+        customersOnly: false,
+      },
+    ],
+  });
+  expect(verdict.publishable).toBe(true);
+});
+
+it('keeps a stage hub even when the model sets customersOnly', async () => {
+  const reports = await scoutClusterHubs({
+    program: 'casa',
+    cameraId: 'cam-1',
+    sourcePath: 'c1.mp4',
+    hubs: [792.6],
+    dir: '/tmp',
+    extractFrame: async () => undefined,
+    readJpeg: async () => Buffer.from('jpg'),
+    ask: async () => ({
+      action: 'keep',
+      subjectInFrame: false,
+      sameScene: true,
+      blackFrame: false,
+      publishable: true,
+      visualQuality: 80,
+      contentRelevance: 80,
+      customersOnly: true,
+      reason:
+        'Performer with microphone visible, stage and audience present, suitable for live show reel.',
+    }),
+  });
+  expect(reports[0]?.customersOnly).toBe(false);
+  expect(reports[0]?.subjectInFrame).toBe(true);
+  expect(pickScoutedHub(reports)?.hub).toBe(792.6);
 });
 
 it('stays on the same peak when asking for a replacement offset', () => {
