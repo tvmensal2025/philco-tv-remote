@@ -117,7 +117,7 @@ export function clusterPreferredStart(input: {
   return Number(Math.max(windowStart, Math.min(usableEnd, preferred)).toFixed(3));
 }
 
-export function nextClusterOffset(input: {
+function offsetOnHub(input: {
   windowStart: number;
   windowDuration: number;
   takeDuration: number;
@@ -131,9 +131,7 @@ export function nextClusterOffset(input: {
     .filter((peak) => Math.abs(peak.offsetSeconds - input.hub) <= radius)
     .filter((peak) => used.every((start) => Math.abs(peak.offsetSeconds - start) >= 1.4))
     .sort((a, b) => b.fusedScore - a.fusedScore);
-  const preferred =
-    nearby[0]?.offsetSeconds ??
-    input.hub + (used.length + 1) * Math.max(2.4, input.takeDuration * 0.2);
+  const preferred = nearby[0]?.offsetSeconds ?? input.hub;
   if (Math.abs(preferred - input.hub) > radius) return null;
   const snapped = snapTake({
     windowStart: input.windowStart,
@@ -146,6 +144,29 @@ export function nextClusterOffset(input: {
   if (used.some((start) => Math.abs(snapped.start - start) < 1.4)) return null;
   if (Math.abs(snapped.start - input.hub) > CASA_CLUSTER_SPAN_SECONDS) return null;
   return snapped.start;
+}
+
+export function nextClusterOffset(input: {
+  windowStart: number;
+  windowDuration: number;
+  takeDuration: number;
+  usedOffsets: number[];
+  peaks: PeakHit[];
+  hub: number;
+  hubs?: number[];
+}): number | null {
+  const used = input.usedOffsets;
+  const scouted = input.hubs?.length ? input.hubs : [input.hub];
+  const unusedHubs = scouted.filter((hub) => used.every((start) => Math.abs(hub - start) >= 8));
+  const ordered = [...unusedHubs, input.hub, ...scouted.filter((hub) => hub !== input.hub)];
+  const seen = new Set<number>();
+  for (const hub of ordered) {
+    if (seen.has(hub)) continue;
+    seen.add(hub);
+    const found = offsetOnHub({ ...input, hub, usedOffsets: used });
+    if (found != null) return found;
+  }
+  return null;
 }
 
 export function snapTake(input: {

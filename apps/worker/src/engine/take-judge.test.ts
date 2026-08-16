@@ -21,26 +21,25 @@ const diningRoom: TakeVerdict = {
   reason: 'mesas de clientes, nao palco',
 };
 
-function casaPlan(offset = 12): ReelPlan {
+function casaPlan(offsets: number | number[] = 12): ReelPlan {
+  const starts = Array.isArray(offsets) ? offsets : [offsets];
   return {
     program: 'casa',
     join: 'dissolve',
-    duration: 12,
+    duration: starts.length * 12,
     aspect_ratio: '9:16',
-    scenes: [
-      {
-        camera_id: 'cam-1',
-        source_recording_path: 'c1.mp4',
-        source_start_offset: offset,
-        duration: 12,
-        speed: 1,
-        transition: 'dissolve',
-        reason: 'gancho',
-        position: 1,
-        hasAudio: true,
-        role: 'master',
-      },
-    ],
+    scenes: starts.map((offset, index) => ({
+      camera_id: 'cam-1',
+      source_recording_path: 'c1.mp4',
+      source_start_offset: offset,
+      duration: 12,
+      speed: 1,
+      transition: 'dissolve',
+      reason: index === 0 ? 'gancho' : 'take',
+      position: 1,
+      hasAudio: true,
+      role: 'master',
+    })),
     score: 80,
     detailedScores: { food: 40, action: 70, visual: 80, marketing: 50, ambience: 40 },
     reason: 'test',
@@ -60,6 +59,16 @@ describe('take judge', () => {
         visualQuality: 80,
         contentRelevance: 80,
         reason: 'Clear, well-lit restaurant scene with customers, matching program subject',
+      }),
+    ).toBe(true);
+    expect(
+      customersOnlyFromVerdict({
+        action: 'fail',
+        subjectInFrame: false,
+        sameScene: true,
+        blackFrame: false,
+        publishable: false,
+        reason: 'No performer or stage visible, only seated customers in dining area',
       }),
     ).toBe(true);
     expect(
@@ -250,6 +259,69 @@ it('keeps a take after the dining-room offset is swapped for the stage peak', as
   expect(plan.reports.some((row) => row.decision === 'ACCEPT')).toBe(true);
 });
 
+it('does not abort the reel when the model hardRejects a dining-room take', () => {
+  expect(
+    actionFromVerdict(
+      {
+        action: 'fail',
+        subjectInFrame: false,
+        sameScene: true,
+        blackFrame: false,
+        publishable: false,
+        visualQuality: 70,
+        contentRelevance: 10,
+        hardReject: true,
+        rejectCode: 'wrong_scene',
+        reason: 'No performer or stage visible, only seated customers in dining area',
+      },
+      0,
+    ),
+  ).toBe('replace');
+});
+
+it('keeps the approved hook and drops later dining takes instead of failing the job', async () => {
+  const stage = {
+    action: 'keep' as const,
+    subjectInFrame: true,
+    sameScene: true,
+    blackFrame: false,
+    publishable: true,
+    reason: 'Performer visible on stage with audience',
+  };
+  let calls = 0;
+  const judged = await refinePlanTakes({
+    plan: casaPlan([600, 605.4]),
+    peaksByCamera: new Map([
+      [
+        'cam-1',
+        [
+          { offsetSeconds: 600.3, fusedScore: 90 },
+          { offsetSeconds: 605, fusedScore: 70 },
+          { offsetSeconds: 792.6, fusedScore: 88 },
+        ],
+      ],
+    ]),
+    windows: new Map([['cam-1', { start: 580, duration: 240 }]]),
+    dir: '/tmp',
+    extractFrame: async () => undefined,
+    readJpeg: async () => Buffer.from('jpg'),
+    hubByCamera: new Map([['cam-1', 600.3]]),
+    hubsByCamera: new Map([['cam-1', [600.3, 792.6]]]),
+    ask: async () => {
+      calls += 1;
+      if (calls === 1) return stage;
+      return diningRoom;
+    },
+  });
+  expect(judged.plan.scenes.length).toBeGreaterThanOrEqual(1);
+  expect(judged.plan.scenes[0]?.source_start_offset).toBe(600);
+  expect(
+    judged.plan.scenes.every(
+      (scene) => scene.source_start_offset < 650 || scene.source_start_offset > 750,
+    ),
+  ).toBe(true);
+});
+
 it('fails the finished MP4 when the judge would not publish', async () => {
   await expect(
     judgeFinishedMp4({
@@ -279,6 +351,25 @@ it('stays on the same peak when asking for a replacement offset', () => {
   expect(next).not.toBeNull();
   expect(next ?? 0).toBeLessThan(70);
   expect(next ?? 0).not.toBe(210);
+});
+
+it('jumps a replacement to another scouted stage hub instead of walking into dining', () => {
+  const next = nextClusterOffset({
+    windowStart: 580,
+    windowDuration: 240,
+    takeDuration: 12,
+    usedOffsets: [600, 605.4],
+    peaks: [
+      { offsetSeconds: 600.3, fusedScore: 90 },
+      { offsetSeconds: 605, fusedScore: 70 },
+      { offsetSeconds: 662.6, fusedScore: 99 },
+      { offsetSeconds: 792.6, fusedScore: 88 },
+    ],
+    hub: 600.3,
+    hubs: [600.3, 792.6],
+  });
+  expect(next).not.toBeNull();
+  expect(next ?? 0).toBeGreaterThan(750);
 });
 
 it('picks the relevant stage hub over a prettier dining-room hub', () => {

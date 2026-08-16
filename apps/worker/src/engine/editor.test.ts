@@ -188,6 +188,38 @@ describe('four-program editor', () => {
     expect(plan.duration).toBeLessThan(70);
   });
 
+  it('spreads Casa takes across scouted stage hubs instead of walking one neighborhood into dining', () => {
+    const plan = compileProgram({
+      clips: clips()
+        .filter((clip) => clip.position === 1)
+        .map((clip) => ({
+          ...clip,
+          startOffsetSeconds: 580,
+          windowDurationSeconds: 240,
+        })),
+      program: 'casa',
+      peaksByCamera: new Map([
+        [
+          'cam-1',
+          [
+            { offsetSeconds: 600.3, fusedScore: 90 },
+            { offsetSeconds: 605, fusedScore: 70 },
+            { offsetSeconds: 792.6, fusedScore: 88 },
+          ],
+        ],
+      ]),
+      cameraScores: new Map([[1, 88]]),
+      editMode: 'single_camera',
+      compatiblePositions: new Set([1]),
+      hubByCamera: new Map([['cam-1', 600.3]]),
+      hubsByCamera: new Map([['cam-1', [600.3, 792.6]]]),
+    });
+    const starts = plan.scenes.map((scene) => scene.source_start_offset);
+    expect(starts.some((start) => start < 650)).toBe(true);
+    expect(starts.some((start) => start > 750)).toBe(true);
+    expect(starts.every((start) => start < 640 || start > 750)).toBe(true);
+  });
+
   it('treats a strong Vision ranking as high-quality even if the editorial score is mid', () => {
     const plan = compileProgram({
       clips: clips().map((clip) => ({ ...clip, windowDurationSeconds: 38 })),

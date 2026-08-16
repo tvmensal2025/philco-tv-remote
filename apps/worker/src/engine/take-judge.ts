@@ -46,6 +46,7 @@ export type TakeJudgeReport = {
   replacements: number;
   reason: string;
   hookScore?: number;
+  customersOnly?: boolean;
 };
 
 export const reelPublishVerdictSchema = z.object({
@@ -81,11 +82,25 @@ export type HubScoutReport = {
 
 export function customersOnlyFromVerdict(verdict: TakeVerdict): boolean {
   if (verdict.customersOnly === true) return true;
-  if (verdict.customersOnly === false) return false;
   const text = verdict.reason.toLowerCase();
-  const dining = /(customer|dining|tables?|mesa|seated|dining room)/i.test(text);
-  const stage = /(performer|stage|singer|band|palco|cantor|instrument)/i.test(text);
-  return dining && !stage;
+  const noShow =
+    /no (clear )?(performer|stage)|without (a )?(performer|stage)|only seated|only customer|sem palco|sem cantor/i.test(
+      text,
+    );
+  const dining = /(customer|dining|tables?|mesa|seated|dining room|\bcrowd\b)/i.test(text);
+  const stagePositive =
+    /(on stage|stage view|performer visible|singer|band|palco|cantor|instrument)/i.test(text) &&
+    !noShow;
+  if (noShow || (dining && !stagePositive)) return true;
+  if (verdict.customersOnly === false) return false;
+  return false;
+}
+
+export function isUnusableHardReject(verdict: TakeVerdict): boolean {
+  const code = verdict.rejectCode ?? (verdict.blackFrame ? 'black' : 'none');
+  return (
+    verdict.blackFrame === true || code === 'black' || code === 'watermark' || code === 'unusable'
+  );
 }
 
 export function isTakeJudgeConfigured() {
@@ -103,19 +118,12 @@ export function actionFromVerdict(
   replacementsUsed: number,
 ): 'keep' | 'replace' | 'fail' {
   const customersOnly = customersOnlyFromVerdict(verdict);
-  const code = verdict.rejectCode ?? (verdict.blackFrame ? 'black' : 'none');
   const visual = verdict.visualQuality ?? (verdict.publishable ? 70 : 40);
   const relevance = customersOnly
     ? Math.min(verdict.contentRelevance ?? 18, EDITORIAL.prettyButWrongRelevance - 1)
     : (verdict.contentRelevance ??
       (verdict.subjectInFrame && verdict.publishable && verdict.sameScene ? 80 : 20));
-  const hard =
-    verdict.hardReject === true ||
-    code === 'black' ||
-    code === 'watermark' ||
-    code === 'unusable' ||
-    verdict.blackFrame;
-  if (hard) return 'fail';
+  if (isUnusableHardReject(verdict)) return 'fail';
   const prettyButWrong =
     customersOnly || (visual >= 70 && relevance < EDITORIAL.prettyButWrongRelevance);
   const keep =
@@ -128,6 +136,14 @@ export function actionFromVerdict(
     visual >= EDITORIAL.minVisualQuality &&
     !prettyButWrong;
   if (keep) return 'keep';
+  if (
+    customersOnly ||
+    verdict.rejectCode === 'wrong_scene' ||
+    verdict.rejectCode === 'no_subject'
+  ) {
+    if (replacementsUsed >= MAX_TAKE_REPLACEMENTS) return 'fail';
+    return 'replace';
+  }
   if (verdict.action === 'fail') return 'fail';
   if (replacementsUsed >= MAX_TAKE_REPLACEMENTS) return 'fail';
   return 'replace';
@@ -147,8 +163,8 @@ export function hookScore(
   return Math.round(visualQuality * 0.3 + contentRelevance * 0.5 + (subjectInFrame ? 20 : 0));
 }
 
-export function pickScoutedHub(reports: HubScoutReport[]): HubScoutReport | null {
-  const eligible = reports
+export function eligibleScoutHubs(reports: HubScoutReport[]): HubScoutReport[] {
+  return reports
     .filter(
       (row) =>
         !row.hardReject &&
@@ -160,7 +176,10 @@ export function pickScoutedHub(reports: HubScoutReport[]): HubScoutReport | null
       (left, right) =>
         right.contentRelevance - left.contentRelevance || right.visualQuality - left.visualQuality,
     );
-  return eligible[0] ?? null;
+}
+
+export function pickScoutedHub(reports: HubScoutReport[]): HubScoutReport | null {
+  return eligibleScoutHubs(reports)[0] ?? null;
 }
 
 export async function scoutClusterHubs(input: {
@@ -304,25 +323,29 @@ export async function refinePlanTakes(input: {
   readJpeg?: (file: string) => Promise<Buffer>;
   ask?: TakeJudgeAsk;
   hubByCamera?: Map<string, number>;
+  hubsByCamera?: Map<string, number[]>;
 }): Promise<{ plan: ReelPlan; reports: TakeJudgeReport[] }> {
   if (!input.ask && !isTakeJudgeConfigured()) {
     return { plan: input.plan, reports: [] };
   }
   const readJpeg = input.readJpeg ?? ((file: string) => readFile(file));
-  const scenes = [...input.plan.scenes];
+  const planned = [...input.plan.scenes];
+  const kept: ReelPlan['scenes'] = [];
   const reports: TakeJudgeReport[] = [];
   const rejectedStarts = new Set<string>();
   let firstHint: string | undefined;
   let firstJpeg: Buffer | undefined;
-  for (let index = 0; index < scenes.length; index += 1) {
-    const scene = scenes[index]!;
+  for (let index = 0; index < planned.length; index += 1) {
+    const scene = planned[index]!;
     const window = input.windows.get(scene.camera_id) ?? {
       start: scene.source_start_offset,
       duration: Math.max(scene.duration, 8),
     };
     const peaks = input.peaksByCamera.get(scene.camera_id) ?? [];
+    const scoutedHubs = input.hubsByCamera?.get(scene.camera_id) ?? [];
     const hub =
       input.hubByCamera?.get(scene.camera_id) ??
+      scoutedHubs[0] ??
       clusterHub({
         windowStart: window.start,
         windowDuration: window.duration,
@@ -341,34 +364,37 @@ export async function refinePlanTakes(input: {
         await input.extractFrame(current.source_recording_path, at, dest);
         jpegs.push(await readJpeg(dest));
       }
-      const images = firstJpeg && index > 0 ? [firstJpeg, ...jpegs] : jpegs;
+      const images = firstJpeg && kept.length > 0 ? [firstJpeg, ...jpegs] : jpegs;
       const verdict = await judgeTakeImages({
         program: input.plan.program,
         images,
-        takeIndex: index,
-        takeCount: scenes.length,
+        takeIndex: kept.length,
+        takeCount: planned.length,
         firstTakeHint: firstHint,
         ask: input.ask,
       });
+      const customersOnly = customersOnlyFromVerdict(verdict);
       const visual = verdict.visualQuality ?? (verdict.publishable ? 70 : 40);
-      const relevance =
-        verdict.contentRelevance ?? (verdict.subjectInFrame && verdict.publishable ? 80 : 18);
-      const hook = index === 0 ? hookScore(visual, relevance, verdict.subjectInFrame) : undefined;
+      const relevance = customersOnly
+        ? Math.min(verdict.contentRelevance ?? 18, EDITORIAL.prettyButWrongRelevance - 1)
+        : (verdict.contentRelevance ?? (verdict.subjectInFrame && verdict.publishable ? 80 : 18));
+      const hook =
+        kept.length === 0 ? hookScore(visual, relevance, verdict.subjectInFrame) : undefined;
       let action = actionFromVerdict(verdict, replacements);
-      if (index === 0 && action === 'keep' && (hook ?? 0) < EDITORIAL.minHookScore) {
+      if (kept.length === 0 && action === 'keep' && (hook ?? 0) < EDITORIAL.minHookScore) {
         action = replacements >= MAX_TAKE_REPLACEMENTS ? 'fail' : 'replace';
       }
       const report: TakeJudgeReport = {
-        takeIndex: index,
+        takeIndex: kept.length,
         cameraId: current.camera_id,
         sourceIn: current.source_start_offset,
         sourceOut: current.source_start_offset + current.duration,
         frames: stamps.map((value) => Number(value.toFixed(2))),
         visualQuality: visual,
         contentRelevance: relevance,
-        subjectInFrame: verdict.subjectInFrame,
+        subjectInFrame: customersOnly ? false : verdict.subjectInFrame,
         sameScene: verdict.sameScene,
-        hardReject: action === 'fail',
+        hardReject: isUnusableHardReject(verdict),
         rejectCode: (verdict.rejectCode ??
           (verdict.blackFrame ? 'black' : 'none')) as HardRejectCode,
         decision: decisionLabel(action),
@@ -376,45 +402,46 @@ export async function refinePlanTakes(input: {
         replacements,
         reason: verdict.reason,
         hookScore: hook,
+        customersOnly,
       };
       if (action === 'keep') {
-        scenes[index] = current;
+        kept.push(current);
         reports.push(report);
-        if (index === 0) {
+        if (kept.length === 1) {
           firstHint = verdict.reason;
           firstJpeg = jpegs[1] ?? jpegs[0];
         }
         break;
       }
       rejectedStarts.add(current.source_start_offset.toFixed(2));
-      if (action === 'fail') {
-        reports.push(report);
-        throw new TakeJudgeError(verdict.reason, reports);
-      }
       const nextStart = nextClusterOffset({
         windowStart: window.start,
         windowDuration: window.duration,
         takeDuration: current.duration,
         usedOffsets: [
-          ...scenes
-            .filter((_, sceneIndex) => sceneIndex !== index)
-            .map((row) => row.source_start_offset),
+          ...kept.map((row) => row.source_start_offset),
           current.source_start_offset,
           ...[...rejectedStarts].map((value) => Number(value)),
         ],
         peaks,
         hub,
+        hubs: scoutedHubs.length ? scoutedHubs : [hub],
       });
       reports.push(report);
-      if (nextStart == null || rejectedStarts.has(nextStart.toFixed(2))) {
-        reports.push({ ...report, action: 'fail', decision: 'REJECT', hardReject: true });
-        throw new TakeJudgeError(verdict.reason, reports);
+      const exhausted =
+        action === 'fail' || nextStart == null || rejectedStarts.has(nextStart.toFixed(2));
+      if (exhausted) {
+        if (kept.length === 0) {
+          reports.push({ ...report, action: 'fail', decision: 'REJECT', hardReject: true });
+          throw new TakeJudgeError(verdict.reason, reports);
+        }
+        break;
       }
       replacements += 1;
       current = { ...current, source_start_offset: nextStart };
     }
   }
-  return { plan: recomputePlanDuration({ ...input.plan, scenes }), reports };
+  return { plan: recomputePlanDuration({ ...input.plan, scenes: kept }), reports };
 }
 
 export async function judgeFinishedMp4(input: {

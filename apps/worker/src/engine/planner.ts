@@ -146,6 +146,7 @@ export class ReelPlanner {
       editMode?: 'single_camera' | 'dual_camera' | 'multicamera';
       compatiblePositions?: Set<number>;
       hubByCamera?: Map<string, number>;
+      hubsByCamera?: Map<string, number[]>;
     },
   ): Promise<ReelPlan> {
     if (!clips.length) throw new Error('NO_CAMERA_SEGMENTS');
@@ -160,6 +161,7 @@ export class ReelPlanner {
       editMode: extras?.editMode,
       compatiblePositions: extras?.compatiblePositions,
       hubByCamera: extras?.hubByCamera,
+      hubsByCamera: extras?.hubsByCamera,
     });
   }
 }
@@ -174,6 +176,7 @@ export function compileProgram(input: {
   editMode?: 'single_camera' | 'dual_camera' | 'multicamera';
   compatiblePositions?: Set<number>;
   hubByCamera?: Map<string, number>;
+  hubsByCamera?: Map<string, number[]>;
 }): ReelPlan {
   const clips = input.clips.map((clip) => ({
     ...clip,
@@ -212,14 +215,22 @@ export function compileProgram(input: {
     const windowDuration = clip.windowDurationSeconds ?? book.targetDuration;
     const peaks = beat.preferPeak === false ? [] : (input.peaksByCamera.get(clip.cameraId) ?? []);
     const forcedHub = input.hubByCamera?.get(clip.cameraId);
+    const scoutedHubs =
+      input.hubsByCamera?.get(clip.cameraId)?.filter((hub) => Number.isFinite(hub)) ??
+      (forcedHub != null ? [forcedHub] : []);
+    const hubForBeat = scoutedHubs.length ? scoutedHubs[beatIndex % scoutedHubs.length] : forcedHub;
+    const indexOnHub = scoutedHubs.length ? Math.floor(beatIndex / scoutedHubs.length) : beatIndex;
+    const countOnHub = scoutedHubs.length
+      ? Math.ceil(book.beats.length / scoutedHubs.length)
+      : book.beats.length;
     const casaPreferred = clusterPreferredStart({
       windowStart: clip.startOffsetSeconds,
       windowDuration,
       takeDuration: beat.durationSeconds,
-      index: beatIndex,
-      count: book.beats.length,
+      index: indexOnHub,
+      count: countOnHub,
       peaks,
-      hub: forcedHub,
+      hub: hubForBeat,
     });
     const hookCandidate =
       book.program === 'casa' && beatIndex === 0

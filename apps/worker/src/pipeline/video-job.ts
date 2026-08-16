@@ -108,6 +108,7 @@ import { workerId } from '../worker-id.js';
 import { houseCutFromPlan, keepPictureJoins, ReelPlanner } from '../engine/planner.js';
 import { assignStrategicFxAndSpeed, shouldAssignStrategicFx } from '../engine/fx-pass.js';
 import {
+  eligibleScoutHubs,
   judgeFinishedMp4,
   pickScoutedHub,
   refinePlanTakes,
@@ -164,6 +165,7 @@ async function processClaimedVideo(
   let takeJudgeReports: TakeJudgeReport[] = [];
   let hubScoutReports: HubScoutReport[] = [];
   const hubByCamera = new Map<string, number>();
+  const hubsByCamera = new Map<string, number[]>();
   try {
     await setStatus(
       payload.tenantId,
@@ -318,8 +320,15 @@ async function processClaimedVideo(
           extractFrame: extractJpegFrameAt,
         });
         hubScoutReports.push(...reports);
-        const chosen = pickScoutedHub(reports);
-        if (chosen) hubByCamera.set(clip.cameraId, chosen.hub);
+        const eligible = eligibleScoutHubs(reports);
+        const chosen = eligible[0] ?? pickScoutedHub(reports);
+        if (chosen) {
+          hubByCamera.set(clip.cameraId, chosen.hub);
+          hubsByCamera.set(
+            clip.cameraId,
+            eligible.length ? eligible.map((row) => row.hub) : [chosen.hub],
+          );
+        }
       }
       timings.hubScoutMs = Date.now() - scoutStarted;
       log.info(
@@ -403,6 +412,7 @@ async function processClaimedVideo(
             editMode: nextEditorial.recommendedMode,
             compatiblePositions: new Set(nextWorking.map((clip) => clip.position)),
             hubByCamera,
+            hubsByCamera,
           }),
         };
       });
@@ -724,6 +734,7 @@ async function processClaimedVideo(
         dir,
         extractFrame: extractJpegFrameAt,
         hubByCamera,
+        hubsByCamera,
       });
       renderPlan = judged.plan;
       takeJudgeReports = judged.reports;
