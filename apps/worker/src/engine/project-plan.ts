@@ -37,6 +37,8 @@ export function applyCompiledGraph(
       punchIn: scene.punchIn,
       motion: scene.motion,
       fxAssetId: scene.fxAssetId,
+      crop: scene.crop,
+      cropMode: scene.cropMode,
     };
   });
   if (!scenes.length) throw new Error('Export failed. Reason: timeline has no video clips');

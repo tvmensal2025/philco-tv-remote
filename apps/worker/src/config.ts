@@ -119,6 +119,40 @@ export const config = z
     ),
     ELEVENLABS_MODEL_ID: z.string().default('eleven_multilingual_v2'),
     ELEVENLABS_TIMEOUT_MS: z.coerce.number().int().min(5000).max(120_000).default(45_000),
+    ENABLE_ADOBE_DGR: z.preprocess(
+      (value) =>
+        typeof value === 'string'
+          ? ['true', '1', 'yes'].includes(value.trim().toLowerCase())
+          : value,
+      z.boolean().default(true),
+    ),
+    ADOBE_CLIENT_ID: z.preprocess(
+      (value) => (typeof value === 'string' && value.trim().length >= 8 ? value.trim() : undefined),
+      z.string().min(8).optional(),
+    ),
+    ADOBE_CLIENT_SECRET: z.preprocess(
+      (value) => (typeof value === 'string' && value.trim().length >= 8 ? value.trim() : undefined),
+      z.string().min(8).optional(),
+    ),
+    ADOBE_IMS_SCOPE: z.string().default('openid,AdobeID,firefly_api,ff_apis'),
+    ADOBE_MOGRT_URL: z.preprocess(
+      (value) =>
+        typeof value === 'string' && /^https?:\/\//i.test(value.trim()) ? value.trim() : undefined,
+      z.string().url().optional(),
+    ),
+    ADOBE_MOGRT_OBJECT_KEY: z.preprocess(
+      (value) => (typeof value === 'string' && value.trim().length >= 4 ? value.trim() : undefined),
+      z.string().min(4).optional(),
+    ),
+    ADOBE_PRESET_ID: z.string().default('ffs_video_api_prores'),
+    ADOBE_ORG_ID: z.preprocess(
+      (value) => (typeof value === 'string' && value.trim().length >= 6 ? value.trim() : undefined),
+      z.string().min(6).optional(),
+    ),
+    ADOBE_TECHNICAL_ACCOUNT_ID: z.preprocess(
+      (value) => (typeof value === 'string' && value.trim().length >= 8 ? value.trim() : undefined),
+      z.string().min(8).optional(),
+    ),
     ENABLE_VISUAL_QC: z.preprocess(
       (value) =>
         typeof value === 'string'

@@ -46,5 +46,7 @@ describe('applyCompiledGraph', () => {
     expect(next.scenes[0]?.source_recording_path).toBe('/tmp/a.mp4');
     expect(next.scenes[0]?.source_start_offset).toBe(1);
     expect(next.scenes[0]?.duration).toBe(2);
+    expect(next.scenes[0]?.cropMode).toBe('crop');
+    expect(next.scenes[0]?.crop?.[2]).toBeGreaterThan(400);
   });
 });

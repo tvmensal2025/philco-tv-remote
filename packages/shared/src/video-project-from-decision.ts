@@ -12,7 +12,26 @@ import {
   type TransitionType,
   type VideoProject,
 } from './video-project.js';
+import { openReelsCrop } from './crop.js';
 import { makeVideoClip } from './video-project-ops.js';
+
+function reelsTransform(punchIn: boolean) {
+  const frameW = 1920;
+  const frameH = 1080;
+  const fitted = openReelsCrop({ frameWidth: frameW, frameHeight: frameH });
+  const [x, y, w, h] = fitted.bbox;
+  return {
+    ...emptyTransform(),
+    scale: punchIn ? 1.08 : 1,
+    fit: 'cover' as const,
+    crop: {
+      x: x / frameW,
+      y: y / frameH,
+      width: w / frameW,
+      height: h / frameH,
+    },
+  };
+}
 
 export type ProjectSourceTake = {
   recordingId: string;
@@ -54,6 +73,7 @@ export function projectFromDecision(input: {
   takes: ProjectSourceTake[];
   name?: string;
   rejected?: Array<{ cameraPosition?: number; recordingId?: string; reason?: string }>;
+  extraDecisions?: AiDecision[];
 }): VideoProject {
   const { decision, takes } = input;
   const takeByRecording = new Map(takes.map((take) => [take.recordingId, take]));
@@ -114,9 +134,7 @@ export function projectFromDecision(input: {
     });
     clip.timelineEndMs = cursor + timelineDur;
     clip.motion = motionFromShot(scene.shotStyle);
-    if (scene.shotStyle === 'punch_in') {
-      clip.transform = { ...emptyTransform(), scale: 1.08 };
-    }
+    clip.transform = reelsTransform(scene.shotStyle === 'punch_in');
     if (index > 0 && transition !== 'cut') {
       clip.transitionIn = {
         type: transition,
@@ -243,7 +261,7 @@ export function projectFromDecision(input: {
   };
   project.ai = {
     mode: 'balanced',
-    decisions,
+    decisions: [...decisions, ...(input.extraDecisions ?? [])],
     unusedMediaIds,
     renderFromProject: true,
   };

@@ -6,6 +6,8 @@ import { toast } from 'sonner';
 import {
   activeSequence,
   addMediaAndClip,
+  addTimelineMarker,
+  applyAiEditorCommand,
   createEmptyProject,
   createHistory,
   createEntityId,
@@ -21,6 +23,7 @@ import {
   redoProject,
   sequenceDurationMs,
   setClipLocked,
+  setClipSourceWindow,
   setTransitionIn,
   snapTimeMs,
   splitClipAtPlayhead,
@@ -102,17 +105,34 @@ export default function VideoEditor({
   const fileRef = useRef<HTMLInputElement>(null);
   const projectRef = useRef(project);
   projectRef.current = project;
+  const historyRef = useRef(history);
+  historyRef.current = history;
+  const gestureBaseline = useRef<VideoProject | null>(null);
   const selected = selectedClipOf(project, selectedId);
   const duration = sequenceDurationMs(activeSequence(project));
 
   const commit = useCallback((next: VideoProject | null, push = true) => {
     if (!next) return;
-    setProject((current) => {
-      if (push) setHistory((stack) => pushHistory(stack, current));
-      return next;
-    });
+    if (push) {
+      const previous = projectRef.current;
+      setHistory((stack) => pushHistory(stack, previous));
+      historyRef.current = pushHistory(historyRef.current, previous);
+    }
+    projectRef.current = next;
+    setProject(next);
     setSaveState('dirty');
   }, []);
+
+  function applyHistory(next: {
+    project: VideoProject;
+    history: ReturnType<typeof createHistory>;
+  }) {
+    projectRef.current = next.project;
+    historyRef.current = next.history;
+    setProject(next.project);
+    setHistory(next.history);
+    setSaveState('dirty');
+  }
 
   useEffect(() => {
     resetPlayback(duration);
@@ -192,18 +212,12 @@ export default function VideoEditor({
       if (action === 'end')
         setPlayback({ timeMs: sequenceDurationMs(activeSequence(current)), playing: false });
       if (action === 'undo') {
-        const undone = undoProject(current, history);
-        if (undone) {
-          setProject(undone.project);
-          setHistory(undone.history);
-        }
+        const undone = undoProject(current, historyRef.current);
+        if (undone) applyHistory(undone);
       }
       if (action === 'redo') {
-        const redone = redoProject(current, history);
-        if (redone) {
-          setProject(redone.project);
-          setHistory(redone.history);
-        }
+        const redone = redoProject(current, historyRef.current);
+        if (redone) applyHistory(redone);
       }
       if (action === 'split') splitSelected();
       if (action === 'delete' && selectedId) commit(deleteClip(current, selectedId, false));
@@ -219,10 +233,13 @@ export default function VideoEditor({
           settings: { ...current.settings, snap: !current.settings.snap },
         });
       }
+      if (action === 'marker') {
+        commit(addTimelineMarker(current, time, 'user', 'Marcador'));
+      }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [commit, history, selectedId, splitSelected]);
+  }, [commit, selectedId, splitSelected]);
 
   async function importFiles(files: FileList | File[], timelineStart?: number) {
     const nextFiles = [...files].filter(
@@ -334,12 +351,10 @@ export default function VideoEditor({
             type="button"
             className="nle-tool"
             title="Desfazer"
+            disabled={history.past.length === 0}
             onClick={() => {
-              const undone = undoProject(project, history);
-              if (undone) {
-                setProject(undone.project);
-                setHistory(undone.history);
-              }
+              const undone = undoProject(projectRef.current, historyRef.current);
+              if (undone) applyHistory(undone);
             }}
           >
             <Undo2 className="size-3.5" />
@@ -348,12 +363,10 @@ export default function VideoEditor({
             type="button"
             className="nle-tool"
             title="Refazer"
+            disabled={history.future.length === 0}
             onClick={() => {
-              const redone = redoProject(project, history);
-              if (redone) {
-                setProject(redone.project);
-                setHistory(redone.history);
-              }
+              const redone = redoProject(projectRef.current, historyRef.current);
+              if (redone) applyHistory(redone);
             }}
           >
             <Redo2 className="size-3.5" />
@@ -441,9 +454,11 @@ export default function VideoEditor({
               <AiPanel
                 project={project}
                 onMode={(mode: AutomationMode) => commit(withAiMode(project, mode))}
-                onCommand={(command) =>
-                  toast.message(`${command} entra na timeline, não gera MP4 direto.`)
-                }
+                onCommand={(command) => {
+                  const result = applyAiEditorCommand(projectRef.current, command);
+                  if (result.changed) commit(result.project);
+                  toast.message(result.message);
+                }}
               />
             ) : leftTab === 'audio' ? (
               <div className="space-y-2 p-3 text-[12px]">
@@ -528,7 +543,11 @@ export default function VideoEditor({
             <AiPanel
               project={project}
               onMode={(mode) => commit(withAiMode(project, mode))}
-              onCommand={(command) => toast.message(`${command} atualiza o projeto, não o MP4.`)}
+              onCommand={(command) => {
+                const result = applyAiEditorCommand(projectRef.current, command);
+                if (result.changed) commit(result.project);
+                toast.message(result.message);
+              }}
             />
           ) : (
             <ClipInspector
@@ -539,6 +558,10 @@ export default function VideoEditor({
               }
               onLock={(locked) => selectedId && commit(setClipLocked(project, selectedId, locked))}
               onDetach={() => selectedId && commit(detachAudio(project, selectedId))}
+              onSourceWindow={(inMs, outMs) =>
+                selectedId &&
+                commit(setClipSourceWindow(projectRef.current, selectedId, inMs, outMs))
+              }
             />
           )}
         </aside>
@@ -551,13 +574,24 @@ export default function VideoEditor({
           zoom={zoom}
           snap={project.settings.snap}
           onSelect={setSelectedId}
+          onGestureStart={() => {
+            gestureBaseline.current = projectRef.current;
+          }}
+          onGestureEnd={() => {
+            const baseline = gestureBaseline.current;
+            gestureBaseline.current = null;
+            if (baseline && baseline !== projectRef.current) {
+              setHistory((stack) => pushHistory(stack, baseline));
+              historyRef.current = pushHistory(historyRef.current, baseline);
+            }
+          }}
           onTrim={(clipId, edge, time) => {
-            const snapped = project.settings.snap ? snapTimeMs(project, time) : time;
-            commit(trimClip(project, clipId, edge, snapped), false);
+            const snapped = project.settings.snap ? snapTimeMs(projectRef.current, time) : time;
+            commit(trimClip(projectRef.current, clipId, edge, snapped), false);
           }}
           onMove={(clipId, time) => {
-            const snapped = project.settings.snap ? snapTimeMs(project, time) : time;
-            commit(moveClip(project, clipId, snapped), false);
+            const snapped = project.settings.snap ? snapTimeMs(projectRef.current, time) : time;
+            commit(moveClip(projectRef.current, clipId, snapped), false);
           }}
           onSplitAt={splitSelected}
           onDropMedia={(mediaId, time, trackId) => {

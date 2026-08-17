@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { compileErrorMessage, compileVideoProject } from './video-project-compiler.js';
 import { projectFromDecision, projectFromLegacyScenes } from './video-project-from-decision.js';
+import { applyAiEditorCommand } from './video-project-ai.js';
 import {
   appendClipToTrack,
   createHistory,
@@ -13,6 +14,7 @@ import {
   pushHistory,
   redoProject,
   setClipLocked,
+  setClipSourceWindow,
   setClipVolume,
   setTransitionIn,
   splitClipAtPlayhead,
@@ -381,5 +383,62 @@ describe('video project core', () => {
         parsed.data.sequences[0]?.tracks.find((track) => track.id === 'track_v1')?.clips,
       ).toHaveLength(3);
     }
+  });
+
+  it('writes 9:16 crop into clips and the render graph', () => {
+    const project = projectFromDecision({ decision: sampleDecision(), takes });
+    const clip = activeSequence(project).tracks.find((track) => track.id === 'track_v1')!.clips[0]!;
+    expect(clip.transform.crop?.width).toBeGreaterThan(0.2);
+    expect(clip.transform.crop?.width).toBeLessThan(0.5);
+    const graph = compileVideoProject(project);
+    expect(graph.scenes[0]?.cropMode).toBe('crop');
+    expect(graph.scenes[0]?.crop?.[2]).toBeGreaterThan(400);
+  });
+
+  it('edits source in/out without duplicating media', () => {
+    const project = projectFromDecision({ decision: sampleDecision(), takes });
+    const clip = activeSequence(project).tracks.find((track) => track.id === 'track_v1')!.clips[0]!;
+    const next = setClipSourceWindow(project, clip.id, 1500, 3000)!;
+    const updated = activeSequence(next).tracks.find((track) => track.id === 'track_v1')!.clips[0]!;
+    expect(updated.sourceInMs).toBeGreaterThanOrEqual(1400);
+    expect(updated.sourceOutMs).toBeLessThanOrEqual(3100);
+    expect(updated.mediaId).toBe(clip.mediaId);
+  });
+
+  it('applies AI commands to the timeline and respects locked clips', () => {
+    const project = projectFromDecision({ decision: sampleDecision(), takes });
+    const v1 = activeSequence(project).tracks.find((track) => track.id === 'track_v1')!;
+    const locked = setClipLocked(project, v1.clips[1]!.id, true);
+    const zoomed = applyAiEditorCommand(locked, 'auto_zoom');
+    const after = activeSequence(zoomed.project).tracks.find((track) => track.id === 'track_v1')!;
+    expect(after.clips[2]?.motion).toBe('slow_push');
+    expect(after.clips[1]?.motion).toBe(v1.clips[1]?.motion);
+    const reel = applyAiEditorCommand(zoomed.project, 'create_reel');
+    expect(reel.project.settings.aspect).toBe('9:16');
+    expect(reel.project.settings.height).toBe(1920);
+    const weak = applyAiEditorCommand(
+      {
+        ...project,
+        sequences: [
+          {
+            ...activeSequence(project),
+            tracks: activeSequence(project).tracks.map((track) =>
+              track.id === 'track_v1'
+                ? {
+                    ...track,
+                    clips: track.clips.map((clip, index) =>
+                      index === 2 ? { ...clip, ai: { ...clip.ai, score: 12 } } : clip,
+                    ),
+                  }
+                : track,
+            ),
+          },
+        ],
+      },
+      'remove_weak',
+    );
+    expect(
+      activeSequence(weak.project).tracks.find((track) => track.id === 'track_v1')!.clips.length,
+    ).toBe(2);
   });
 });

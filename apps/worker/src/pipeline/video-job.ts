@@ -73,9 +73,15 @@ import {
   makeThumbnail,
   scanSegment,
   assertPictureThroughout,
+  run,
 } from './ffmpeg.js';
 import { probeMedia } from './probe-media.js';
 import { renderComposition } from './composition.js';
+import {
+  adobeDgrConfigured,
+  renderAdobeGraphics,
+  resolveAdobeMogrtUrl,
+} from '../adapters/adobe.js';
 import { pickMusicBed } from './music-bed.js';
 import { loadFxCatalogFromDisk } from './fx-assets.js';
 import { decisionFromReelPlan } from '../engine/director.js';
@@ -909,6 +915,42 @@ async function processClaimedVideo(
     timings.ffmpegMs = Date.now() - renderStarted;
     timings.compositionMs = timings.ffmpegMs;
     if (render.timings) Object.assign(timings, render.timings);
+    let adobeGraphics = false;
+    const mogrtUrl = adobeDgrConfigured() ? await resolveAdobeMogrtUrl() : null;
+    if (mogrtUrl) {
+      try {
+        const plate = path.join(dir, 'adobe-dgr.mov');
+        const branded = path.join(dir, 'adobe-branded.mp4');
+        await renderAdobeGraphics({
+          mogrtUrl,
+          copy,
+          outputPath: plate,
+        });
+        await run('ffmpeg', [
+          '-hide_banner',
+          '-loglevel',
+          'error',
+          '-y',
+          '-i',
+          output,
+          '-i',
+          plate,
+          '-filter_complex',
+          '[1:v]format=rgba,scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2:color=0x00000000[fg];[0:v][fg]overlay=0:0:eof_action=pass',
+          '-c:a',
+          'copy',
+          branded,
+        ]);
+        await copyFile(branded, output);
+        adobeGraphics = true;
+        log.info({ ...jobLog, plate }, 'adobe dgr overlay');
+      } catch (error) {
+        log.warn(
+          { ...jobLog, err: error instanceof Error ? error.message : String(error) },
+          'adobe dgr skipped; keeping local composition',
+        );
+      }
+    }
     log.info(
       {
         ...jobLog,
@@ -924,6 +966,7 @@ async function processClaimedVideo(
         composition_strategy: render.strategy ?? null,
         voice_provider: voiceAsset?.provider ?? null,
         voice_duration_ms: voiceAsset?.durationMs ?? null,
+        adobe_dgr: adobeGraphics,
         ffmpegMs: timings.ffmpegMs,
       },
       'render',
@@ -1068,6 +1111,20 @@ async function processClaimedVideo(
                   hasAudio: clip.hasAudio,
                 })),
                 name: plan.caption || undefined,
+                rejected: (editorial?.rejected ?? []).map((row) => ({
+                  cameraPosition: row.cameraPosition,
+                  recordingId: row.cameraId,
+                  reason: row.reason,
+                })),
+                extraDecisions: takeJudgeReports
+                  .filter((row) => row.decision === 'REJECT')
+                  .map((row) => ({
+                    id: `dec_judge_${row.takeIndex}_${Math.round(row.sourceIn * 100)}`,
+                    atMs: Math.round(row.sourceIn * 1000),
+                    kind: 'reject_take' as const,
+                    reason: row.reason,
+                    detail: `${row.sourceIn.toFixed(1)}s–${row.sourceOut.toFixed(1)}s · ${row.rejectCode}`,
+                  })),
               }),
         camera_rankings: plan.cameraRankings,
         best_frames: plan.bestFrames,

@@ -177,7 +177,9 @@ export default function HouseCutBoard({
                     <p className="mt-0.5 text-xs text-muted-foreground">
                       {[
                         take.camera,
-                        formatSeconds(take.duration),
+                        take.sourceIn != null && take.sourceOut != null
+                          ? `${formatSeconds(take.sourceIn)}–${formatSeconds(take.sourceOut)}`
+                          : formatSeconds(take.duration),
                         isDissolveTransition(take.transition) ? 'Dissolve' : 'Corte',
                       ]
                         .filter(Boolean)

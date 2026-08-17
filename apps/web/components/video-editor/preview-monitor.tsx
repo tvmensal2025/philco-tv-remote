@@ -49,6 +49,16 @@ function LayerVideo({
     void video.play().catch(() => undefined);
   }, [playing, url]);
 
+  const crop = layer.transform.crop;
+  const cropStyle = crop
+    ? {
+        width: `${100 / Math.max(0.05, crop.width)}%`,
+        height: `${100 / Math.max(0.05, crop.height)}%`,
+        left: `${-(crop.x / Math.max(0.05, crop.width)) * 100}%`,
+        top: `${-(crop.y / Math.max(0.05, crop.height)) * 100}%`,
+      }
+    : { inset: 0 as const, width: '100%', height: '100%' };
+
   return (
     <div
       className="absolute inset-0 origin-center overflow-hidden"
@@ -64,7 +74,8 @@ function LayerVideo({
           muted
           playsInline
           preload="auto"
-          className="absolute inset-0 h-full w-full object-cover"
+          className="absolute max-w-none object-cover"
+          style={cropStyle}
         />
       ) : (
         <div className="flex h-full items-center justify-center bg-[#161b24] text-xs text-[#8d97a8]">

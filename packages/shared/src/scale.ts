@@ -12,6 +12,7 @@ export type WorkerCapabilities = {
   tracking: boolean;
   index: boolean;
   highlight: boolean;
+  adobe?: boolean;
 };
 
 export type WorkerDescriptor = {

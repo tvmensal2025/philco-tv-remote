@@ -5,9 +5,11 @@ import {
   createEntityId,
   emptyColor,
   emptyTransform,
+  findClip,
   sequenceDurationMs,
   snapMsToFrame,
   sourceDurationMs,
+  type MarkerKind,
   type ProjectClip,
   type TimelineTrack,
   type TransitionType,
@@ -548,6 +550,95 @@ export function addMediaAndClip(
   });
   if (media.kind === 'audio') clip.kind = 'audio';
   return insertClipAt(withMedia, trackId, clip, clip.timelineStartMs);
+}
+
+export function setClipSourceWindow(
+  project: VideoProject,
+  clipId: string,
+  sourceInMs: number,
+  sourceOutMs: number,
+): VideoProject | null {
+  const found = findClip(project, clipId);
+  if (!found || found.track.locked || found.clip.lockedByUser) return null;
+  const media = project.media.find((item) => item.id === found.clip.mediaId);
+  const maxSource =
+    media?.durationMs && media.durationMs > 0 ? media.durationMs : Math.max(sourceOutMs, 3_600_000);
+  const fps = project.settings.fps;
+  const inMs = snapMsToFrame(Math.max(0, Math.min(maxSource - MIN_CLIP_MS, sourceInMs)), fps);
+  const outMs = snapMsToFrame(Math.max(inMs + MIN_CLIP_MS, Math.min(maxSource, sourceOutMs)), fps);
+  if (outMs - inMs < MIN_CLIP_MS) return null;
+  const duration = Math.round((outMs - inMs) / (found.clip.speed || 1));
+  return patchClip(project, clipId, {
+    sourceInMs: inMs,
+    sourceOutMs: outMs,
+    timelineEndMs: found.clip.timelineStartMs + duration,
+  });
+}
+
+export function packTrackClips(project: VideoProject, trackId: string): VideoProject {
+  return mapTrack(project, trackId, (track) => {
+    if (track.locked || track.clips.some((clip) => clip.lockedByUser)) return track;
+    let cursor = 0;
+    const ordered = [...track.clips].sort((a, b) => a.timelineStartMs - b.timelineStartMs);
+    return {
+      ...track,
+      clips: ordered.map((clip) => {
+        const duration = clipDurationMs(clip);
+        const next = {
+          ...clip,
+          timelineStartMs: cursor,
+          timelineEndMs: cursor + duration,
+        };
+        cursor += duration;
+        return next;
+      }),
+    };
+  });
+}
+
+export function addTimelineMarker(
+  project: VideoProject,
+  timeMs: number,
+  kind: MarkerKind = 'user',
+  label = '',
+): VideoProject {
+  const sequence = activeSequence(project);
+  return {
+    ...project,
+    sequences: [
+      {
+        ...sequence,
+        markers: [
+          ...sequence.markers,
+          {
+            id: createEntityId('mk'),
+            timeMs: snapMsToFrame(Math.max(0, timeMs), project.settings.fps),
+            kind,
+            label,
+          },
+        ],
+      },
+      ...project.sequences.slice(1),
+    ],
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+export function appendAiDecisions(
+  project: VideoProject,
+  rows: NonNullable<VideoProject['ai']>['decisions'],
+): VideoProject {
+  return {
+    ...project,
+    ai: {
+      mode: project.ai?.mode ?? 'balanced',
+      decisions: [...(project.ai?.decisions ?? []), ...rows],
+      unusedMediaIds: project.ai?.unusedMediaIds ?? [],
+      quality: project.ai?.quality,
+      renderFromProject: true,
+    },
+    updatedAt: new Date().toISOString(),
+  };
 }
 
 export function preserveLockedClips(current: VideoProject, incoming: VideoProject): VideoProject {

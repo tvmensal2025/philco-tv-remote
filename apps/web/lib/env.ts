@@ -85,6 +85,9 @@ const serverSchema = z.object({
     (value) => (typeof value === 'string' && value.trim().includes('@') ? value.trim() : undefined),
     z.string().optional(),
   ),
+  ADOBE_CLIENT_ID: optionalText,
+  ADOBE_CLIENT_SECRET: optionalText,
+  ADOBE_MOGRT_URL: optionalText,
 });
 
 export type ServerEnv = z.infer<typeof serverSchema>;
@@ -252,6 +255,22 @@ const definitions: Omit<ConfigItem, 'configured'>[] = [
     required: false,
     secret: true,
     hint: 'Dispara o resumo no horário certo',
+  },
+  {
+    key: 'ADOBE_CLIENT_ID',
+    label: 'Adobe Client ID',
+    group: 'Estúdio',
+    required: false,
+    secret: false,
+    hint: 'Firefly Audio/Video — Dynamic Graphics',
+  },
+  {
+    key: 'ADOBE_CLIENT_SECRET',
+    label: 'Adobe Client Secret',
+    group: 'Estúdio',
+    required: false,
+    secret: true,
+    hint: 'OAuth Server-to-Server da Adobe',
   },
 ];
 

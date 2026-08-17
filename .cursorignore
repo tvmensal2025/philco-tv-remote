@@ -1,0 +1,14 @@
+﻿node_modules
+.next
+.turbo
+dist
+work
+outputs
+tmp
+generated
+*.mp4
+*.pt
+yolo-service/runs
+apps/web/.next
+apps/worker/revideo/output
+apps/worker/revideo/public/runtime

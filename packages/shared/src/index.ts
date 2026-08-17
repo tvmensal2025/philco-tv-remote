@@ -365,3 +365,5 @@ export * from './video-project-ops.js';
 export * from './video-project-from-decision.js';
 export * from './video-project-compiler.js';
 export * from './video-project-preview.js';
+export * from './video-project-ai.js';
+export * from './adobe-av.js';

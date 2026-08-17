@@ -18,4 +18,18 @@ test.describe('editor NLE de projeto', () => {
     await page.getByRole('button', { name: 'Não usados' }).click();
     await expect(page.getByText('Baixa coerência visual')).toBeVisible();
   });
+
+  test('split no playhead e ripple delete fecham a timeline', async ({ page }) => {
+    await page.setViewportSize({ width: 1600, height: 980 });
+    await page.goto('/e2e/editor');
+    await page.getByTestId('nle-ruler').click({ position: { x: 90, y: 8 } });
+    await page.getByRole('button', { name: 'Tesoura / Split' }).click();
+    await expect(page.getByText('C1 Serviço-b').first()).toBeVisible();
+    await page.getByTestId('nle-clip-C1 Serviço-b').click();
+    await page.keyboard.press('Control+Backspace');
+    await expect(page.getByText('C1 Serviço-b')).toHaveCount(0);
+    await page.getByRole('button', { name: 'IA', exact: true }).click();
+    await page.getByRole('button', { name: 'Criar Reel' }).click();
+    await expect(page.getByText(/canvas 9:16/).first()).toBeVisible();
+  });
 });

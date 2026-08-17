@@ -26,6 +26,47 @@ type ReelMeta = {
   } | null;
 };
 
+function hydrateProjectMedia(project: VideoProject, takes: ProjectSourceTake[]): VideoProject {
+  const byRecording = new Map(takes.map((take) => [take.recordingId, take]));
+  const known = new Set(project.media.map((asset) => asset.recordingId).filter(Boolean));
+  const media = project.media.map((asset) => {
+    const take = asset.recordingId ? byRecording.get(asset.recordingId) : undefined;
+    return take ? { ...asset, previewUrl: take.previewUrl, objectPath: take.objectPath } : asset;
+  });
+  const extras = takes
+    .filter((take) => !known.has(take.recordingId))
+    .map((take) => ({
+      id: `media_${take.recordingId}`,
+      kind: 'video' as const,
+      name: take.name ?? take.cameraLabel ?? take.recordingId,
+      recordingId: take.recordingId,
+      cameraId: take.cameraId,
+      cameraPosition: take.cameraPosition,
+      cameraLabel: take.cameraLabel,
+      durationMs: take.durationMs ?? 0,
+      width: 1920,
+      height: 1080,
+      fps: 30,
+      hasAudio: take.hasAudio !== false,
+      previewUrl: take.previewUrl,
+      objectPath: take.objectPath,
+      takeStatus: 'available' as const,
+      scores: take.scores,
+    }));
+  if (!extras.length) return { ...project, media };
+  return {
+    ...project,
+    media: [...media, ...extras],
+    ai: {
+      mode: project.ai?.mode ?? 'balanced',
+      decisions: project.ai?.decisions ?? [],
+      unusedMediaIds: [...(project.ai?.unusedMediaIds ?? []), ...extras.map((item) => item.id)],
+      quality: project.ai?.quality,
+      renderFromProject: project.ai?.renderFromProject ?? false,
+    },
+  };
+}
+
 function rejectedFromMeta(
   meta: ReelMeta,
 ): Array<{ cameraPosition?: number; recordingId?: string; reason?: string }> {
@@ -98,41 +139,37 @@ export async function GET(_request: Request, { params }: { params: Promise<{ ree
     let project: VideoProject | null = null;
     const saved = parseVideoProject(meta.video_project);
     if (saved.success) {
-      project = saved.data;
-      const byId = new Map(takes.map((take) => [`media_${take.recordingId}`, take]));
-      project = {
-        ...project,
-        media: project.media.map((asset) => {
-          const take = asset.recordingId ? byId.get(`media_${asset.recordingId}`) : undefined;
-          return take
-            ? { ...asset, previewUrl: take.previewUrl, objectPath: take.objectPath }
-            : asset;
-        }),
-      };
+      project = hydrateProjectMedia(saved.data, takes);
     } else {
       const decision = parseVideoEditDecisionV2(meta.video_edit_decision);
       if (decision.success) {
-        project = projectFromDecision({
-          decision: decision.data,
+        project = hydrateProjectMedia(
+          projectFromDecision({
+            decision: decision.data,
+            takes,
+            name: reel.title ?? undefined,
+            rejected: rejectedFromMeta(meta),
+          }),
           takes,
-          name: reel.title ?? undefined,
-          rejected: rejectedFromMeta(meta),
-        });
+        );
       } else if (Array.isArray(meta.scenes) && meta.scenes.length) {
-        project = projectFromLegacyScenes({
-          reelId: reel.id,
-          program:
-            meta.program === 'oficio' ||
-            meta.program === 'assinatura' ||
-            meta.program === 'pulso' ||
-            meta.program === 'casa'
-              ? meta.program
-              : undefined,
-          name: reel.title ?? undefined,
-          scenes: meta.scenes as Parameters<typeof projectFromLegacyScenes>[0]['scenes'],
+        project = hydrateProjectMedia(
+          projectFromLegacyScenes({
+            reelId: reel.id,
+            program:
+              meta.program === 'oficio' ||
+              meta.program === 'assinatura' ||
+              meta.program === 'pulso' ||
+              meta.program === 'casa'
+                ? meta.program
+                : undefined,
+            name: reel.title ?? undefined,
+            scenes: meta.scenes as Parameters<typeof projectFromLegacyScenes>[0]['scenes'],
+            takes,
+            rejected: rejectedFromMeta(meta),
+          }),
           takes,
-          rejected: rejectedFromMeta(meta),
-        });
+        );
       } else {
         project = createEmptyProject({
           name: reel.title ?? 'Projeto',

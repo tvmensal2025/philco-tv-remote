@@ -1,28 +1,14 @@
 'use client';
 
 import {
+  aiEditorCommands,
   automationModeLabels,
   automationModes,
   formatProjectTimecode,
+  type AiEditorCommandId,
   type AutomationMode,
   type VideoProject,
 } from '@reelops/shared';
-
-const commands = [
-  'Editar automaticamente',
-  'Melhorar cortes',
-  'Melhorar ritmo',
-  'Encontrar melhores momentos',
-  'Remover momentos ruins',
-  'Criar hook',
-  'Adicionar B-roll',
-  'Adicionar música',
-  'Criar zoom automático',
-  'Criar legendas',
-  'Remover silêncios',
-  'Criar Reel',
-  'Criar Story',
-];
 
 export default function AiPanel({
   project,
@@ -31,7 +17,7 @@ export default function AiPanel({
 }: {
   project: VideoProject;
   onMode: (mode: AutomationMode) => void;
-  onCommand: (command: string) => void;
+  onCommand: (command: AiEditorCommandId) => void;
 }) {
   const decisions = project.ai?.decisions ?? [];
   const quality = project.ai?.quality;
@@ -51,14 +37,14 @@ export default function AiPanel({
           ))}
         </select>
         <div className="mt-2 grid grid-cols-2 gap-1">
-          {commands.map((command) => (
+          {aiEditorCommands.map((command) => (
             <button
-              key={command}
+              key={command.id}
               type="button"
               className="h-7 rounded border border-[#232a36] px-2 text-left text-[10px] hover:border-[#d4a24c]/40"
-              onClick={() => onCommand(command)}
+              onClick={() => onCommand(command.id)}
             >
-              {command}
+              {command.label}
             </button>
           ))}
         </div>

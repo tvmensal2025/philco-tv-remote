@@ -28,6 +28,8 @@ export type CompiledScene = {
   reason?: string;
   scale: number;
   opacity: number;
+  crop?: [number, number, number, number];
+  cropMode?: 'crop' | 'pad_blur';
 };
 
 export type CompiledRenderGraph = {
@@ -72,6 +74,17 @@ export function compileVideoProject(project: VideoProject): CompiledRenderGraph 
     const media = project.media.find((item) => item.id === clip.mediaId);
     const durationSeconds = clipDurationMs(clip) / 1000;
     const sourceSeconds = (clip.sourceOutMs - clip.sourceInMs) / 1000;
+    const frameW = media?.width && media.width > 0 ? media.width : 1920;
+    const frameH = media?.height && media.height > 0 ? media.height : 1080;
+    const cropBox = clip.transform.crop;
+    const crop: [number, number, number, number] | undefined = cropBox
+      ? [
+          Math.round(cropBox.x * frameW),
+          Math.round(cropBox.y * frameH),
+          Math.round(cropBox.width * frameW),
+          Math.round(cropBox.height * frameH),
+        ]
+      : undefined;
     return {
       clipId: clip.id,
       mediaId: clip.mediaId,
@@ -94,6 +107,8 @@ export function compileVideoProject(project: VideoProject): CompiledRenderGraph 
       reason: clip.ai?.reason,
       scale: clip.transform.scale,
       opacity: clip.transform.opacity,
+      crop,
+      cropMode: crop ? 'crop' : undefined,
     };
   });
 

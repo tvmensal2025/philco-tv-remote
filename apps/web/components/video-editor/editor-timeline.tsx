@@ -30,6 +30,8 @@ export default function EditorTimeline({
   onSplitAt,
   onDropMedia,
   onDropTransition,
+  onGestureStart,
+  onGestureEnd,
 }: {
   project: VideoProject;
   selectedId: string | null;
@@ -41,6 +43,8 @@ export default function EditorTimeline({
   onSplitAt: (timeMs: number) => void;
   onDropMedia: (mediaId: string, timeMs: number, trackId: string) => void;
   onDropTransition: (clipId: string, type: string) => void;
+  onGestureStart?: () => void;
+  onGestureEnd?: () => void;
 }) {
   const sequence = activeSequence(project);
   const duration = Math.max(4000, sequenceDurationMs(sequence));
@@ -100,6 +104,7 @@ export default function EditorTimeline({
 
   function onPointerDown(event: React.PointerEvent, next: Drag) {
     drag.current = next;
+    if (next.kind === 'trim' || next.kind === 'move') onGestureStart?.();
     (event.currentTarget as HTMLElement).setPointerCapture(event.pointerId);
   }
 
@@ -120,6 +125,7 @@ export default function EditorTimeline({
   }
 
   function onPointerUp() {
+    if (drag.current?.kind === 'trim' || drag.current?.kind === 'move') onGestureEnd?.();
     drag.current = null;
   }
 
@@ -142,6 +148,7 @@ export default function EditorTimeline({
       >
         <div className="relative" style={{ width, minHeight: '100%' }}>
           <div
+            data-testid="nle-ruler"
             className="sticky top-0 z-10 h-6 border-b border-[#262d3a] bg-[#10131a]"
             onPointerDown={(event) => {
               setPlayback({ timeMs: timeFromX(event.clientX), playing: false });
@@ -320,6 +327,8 @@ function ClipBlock({
             ? 'top-1 bottom-1 bg-[#2a3d58]'
             : 'top-1 bottom-1 bg-[#3a2a18]',
       )}
+      data-clip-id={clip.id}
+      data-testid={`nle-clip-${clip.name}`}
       style={{ left, width }}
     >
       <button

@@ -5,6 +5,8 @@ export type HouseCutTake = {
   cropMode?: string | null;
   camera: string;
   duration: number;
+  sourceIn?: number;
+  sourceOut?: number;
 };
 
 export type ReelCutMetadata = {

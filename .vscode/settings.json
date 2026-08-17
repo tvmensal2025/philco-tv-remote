@@ -1,0 +1,23 @@
+{
+  "files.watcherExclude": {
+    "**/node_modules/**": true,
+    "**/.next/**": true,
+    "**/.turbo/**": true,
+    "**/dist/**": true,
+    "**/work/**": true,
+    "**/.git/objects/**": true,
+    "**/.git/lfs/**": true
+  },
+  "search.exclude": {
+    "**/node_modules": true,
+    "**/.next": true,
+    "**/.turbo": true,
+    "**/dist": true,
+    "**/work": true
+  },
+  "files.exclude": {
+    "**/.next": true,
+    "**/.turbo": true
+  },
+  "typescript.tsserver.maxTsServerMemory": 2048
+}

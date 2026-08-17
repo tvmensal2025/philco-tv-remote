@@ -20,6 +20,7 @@ export function workerCapabilities(): WorkerCapabilities {
     tracking: config.ENABLE_TRACKING,
     index: true,
     highlight: true,
+    adobe: Boolean(config.ENABLE_ADOBE_DGR && config.ADOBE_CLIENT_ID && config.ADOBE_CLIENT_SECRET),
   };
 }
 

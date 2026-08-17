@@ -170,6 +170,29 @@ export async function collectHealthChecks() {
       detail: error instanceof Error ? error.message : 'ffprobe ausente',
     };
   }
+  const adobeId = process.env.ADOBE_CLIENT_ID?.trim();
+  const adobeSecret = process.env.ADOBE_CLIENT_SECRET?.trim();
+  if (adobeId && adobeSecret) {
+    try {
+      const { fetchAdobeAccessToken, ADOBE_AV_API_BASE, adobeAvHeaders } =
+        await import('@reelops/shared');
+      const token = await fetchAdobeAccessToken({ clientId: adobeId, clientSecret: adobeSecret });
+      const presets = await fetch(`${ADOBE_AV_API_BASE}/v1/presets`, {
+        headers: adobeAvHeaders(adobeId, token.accessToken, process.env.ADOBE_ORG_ID),
+      });
+      checks.adobe = {
+        ok: presets.ok,
+        detail: presets.ok ? 'IMS + presets DGR' : `presets ${presets.status}`,
+      };
+    } catch (error) {
+      checks.adobe = {
+        ok: false,
+        detail: error instanceof Error ? error.message.slice(0, 180) : 'Adobe falhou',
+      };
+    }
+  } else {
+    checks.adobe = { ok: true, detail: 'não configurado' };
+  }
   const ok = ['supabase', 'minio', 'redis', 'bullmq', 'worker'].every((key) => checks[key]?.ok);
   return {
     status: ok ? 'healthy' : 'degraded',
